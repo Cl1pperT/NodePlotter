@@ -38,6 +38,25 @@ def get_dem(
   )
 
 
+def get_dem_version(
+  observer_lat: float,
+  observer_lon: float,
+  radius_km: float,
+  resolution_m: float,
+  provider: DemProvider | None = None,
+  cache_dir: Path | None = None,
+) -> str:
+  if provider is None:
+    cache_root = cache_dir or DEFAULT_CACHE_DIR
+    provider = TerrariumProvider(cache_root)
+
+  version_for_request = getattr(provider, "version_for_request", None)
+  if callable(version_for_request):
+    return str(version_for_request(observer_lat, observer_lon, radius_km, resolution_m))
+
+  return provider.__class__.__name__
+
+
 __all__ = [
   "DemProvider",
   "DemResult",
@@ -49,5 +68,6 @@ __all__ = [
   "latlon_to_meters",
   "local_crs",
   "meters_to_latlon",
+  "get_dem_version",
   "TerrariumProvider",
 ]

@@ -78,9 +78,20 @@ class TerrariumProvider(DemProvider):
         "max_y": max_tile_y,
       },
       "tile_url": self.tile_url,
+      "version": self.version_for_request(observer_lat, observer_lon, radius_km, resolution_m),
     }
 
     return DemResult(elevation=mosaic, transform=transform, crs="EPSG:3857", metadata=metadata)
+
+  def version_for_request(
+    self,
+    observer_lat: float,
+    observer_lon: float,
+    radius_km: float,
+    resolution_m: float,
+  ) -> str:
+    zoom = self._choose_zoom(observer_lat, resolution_m)
+    return f"terrarium:z{zoom}:{self.tile_url}"
 
   def _choose_zoom(self, lat: float, resolution_m: float) -> int:
     lat_clamped = max(min(lat, MAX_LAT), -MAX_LAT)

@@ -9,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from pyproj import CRS, Transformer
 
-from app.dem import get_dem
+from app.cache import load_cached_viewshed, make_cache_key, store_cached_viewshed
+from app.dem import get_dem, get_dem_version
 from app.output import RasterOutput, visibility_mask_to_png
 from app.viewshed import compute_viewshed
 
@@ -92,6 +93,40 @@ def compute_viewshed(payload: ViewshedRequest) -> ViewshedResponse:
       "Computation may be slow."
     )
 
+  dem_version = get_dem_version(
+    observer_lat=payload.observer.lat,
+    observer_lon=payload.observer.lon,
+    radius_km=payload.maxRadiusKm,
+    resolution_m=payload.resolutionM,
+  )
+  cache_key = make_cache_key(
+    observer_lat=payload.observer.lat,
+    observer_lon=payload.observer.lon,
+    observer_height_m=payload.observerHeightM,
+    max_radius_km=payload.maxRadiusKm,
+    resolution_m=payload.resolutionM,
+    dem_version=dem_version,
+  )
+  cached = load_cached_viewshed(cache_key)
+  if cached is not None:
+    overlay_payload = {
+      "pngBase64": base64.b64encode(cached.png_bytes).decode("ascii"),
+      "boundsLatLon": cached.overlay_bounds_latlon,
+    }
+    estimate = {
+      "gridSide": grid_side,
+      "cellCount": cell_count,
+      "cacheHit": True,
+    }
+    return ViewshedResponse(
+      observer=payload.observer,
+      maxRadiusKm=payload.maxRadiusKm,
+      overlay=overlay_payload,
+      metadata=cached.metadata,
+      warnings=warnings,
+      estimate=estimate,
+    )
+
   try:
     dem_result = get_dem(
       observer_lat=payload.observer.lat,
@@ -134,9 +169,23 @@ def compute_viewshed(payload: ViewshedRequest) -> ViewshedResponse:
   )
 
   overlay_payload, metadata_payload = _encode_overlay(overlay_output)
+  store_cached_viewshed(
+    cache_key=cache_key,
+    png_bytes=overlay_output.png_bytes,
+    overlay_bounds_latlon=overlay_output.metadata.bounds_latlon,
+    metadata=metadata_payload,
+    request_fingerprint={
+      "observer": {"lat": payload.observer.lat, "lon": payload.observer.lon},
+      "observerHeightM": payload.observerHeightM,
+      "maxRadiusKm": payload.maxRadiusKm,
+      "resolutionM": payload.resolutionM,
+    },
+    dem_version=dem_version,
+  )
   estimate = {
     "gridSide": grid_side,
     "cellCount": cell_count,
+    "cacheHit": False,
   }
 
   return ViewshedResponse(
