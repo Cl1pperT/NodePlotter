@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from pyproj import CRS, Transformer
 
-from app.cache import load_cached_viewshed, make_cache_key, store_cached_viewshed, list_cached_viewsheds
+from app.cache import load_cached_payload, load_cached_viewshed, make_cache_key, store_cached_viewshed, list_cached_viewsheds
 from app.dem import get_dem, get_dem_version
 from app.output import RasterOutput, visibility_mask_to_png
 from app.viewshed import compute_viewshed as compute_viewshed_mask
@@ -79,6 +79,15 @@ class ViewshedHistoryResponse(BaseModel):
   items: list[ViewshedHistoryItem]
 
 
+class ViewshedCacheResponse(BaseModel):
+  cacheKey: str
+  createdAt: str | None = None
+  demVersion: str | None = None
+  request: dict[str, Any] | None = None
+  overlay: dict[str, Any]
+  metadata: dict[str, Any]
+
+
 @app.get("/health")
 def health_check() -> dict:
   return {"status": "ok"}
@@ -88,6 +97,33 @@ def health_check() -> dict:
 def viewshed_history(limit: int = Query(50, ge=1, le=500)) -> ViewshedHistoryResponse:
   items = list_cached_viewsheds(limit=limit)
   return ViewshedHistoryResponse(items=items)
+
+
+@app.get("/viewshed/cache/{cache_key}", response_model=ViewshedCacheResponse)
+def viewshed_cache(cache_key: str) -> ViewshedCacheResponse:
+  cached = load_cached_payload(cache_key)
+  if cached is None:
+    raise HTTPException(status_code=404, detail="Cached viewshed not found.")
+
+  payload = cached.payload
+  overlay = payload.get("overlay") if isinstance(payload.get("overlay"), dict) else {}
+  bounds = overlay.get("boundsLatLon") if isinstance(overlay.get("boundsLatLon"), list) else None
+  if not bounds or len(bounds) != 4:
+    raise HTTPException(status_code=500, detail="Cached overlay metadata is invalid.")
+
+  overlay_payload = {
+    "pngBase64": base64.b64encode(cached.png_bytes).decode("ascii"),
+    "boundsLatLon": bounds,
+  }
+
+  return ViewshedCacheResponse(
+    cacheKey=cache_key,
+    createdAt=payload.get("createdAt"),
+    demVersion=payload.get("demVersion"),
+    request=payload.get("request"),
+    overlay=overlay_payload,
+    metadata=payload.get("metadata", {}),
+  )
 
 
 @app.post("/viewshed", response_model=ViewshedResponse)

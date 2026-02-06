@@ -19,6 +19,12 @@ class CachedOverlay:
   metadata: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class CachedPayload:
+  png_bytes: bytes
+  payload: dict[str, Any]
+
+
 def make_cache_key(
   observer_lat: float,
   observer_lon: float,
@@ -74,6 +80,24 @@ def load_cached_viewshed(cache_key: str, cache_dir: Path | None = None) -> Cache
     ),
     metadata=metadata.get("metadata", {}),
   )
+
+
+def load_cached_payload(cache_key: str, cache_dir: Path | None = None) -> CachedPayload | None:
+  root = cache_dir or DEFAULT_CACHE_DIR
+  entry_dir = root / cache_key
+  metadata_path = entry_dir / "metadata.json"
+  png_path = entry_dir / "overlay.png"
+
+  if not metadata_path.exists() or not png_path.exists():
+    return None
+
+  try:
+    payload = json.loads(metadata_path.read_text())
+    png_bytes = png_path.read_bytes()
+  except Exception:
+    return None
+
+  return CachedPayload(png_bytes=png_bytes, payload=payload)
 
 
 def store_cached_viewshed(

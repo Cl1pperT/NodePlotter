@@ -37,6 +37,22 @@ type OverlayPayload = {
   boundsLatLon: [number, number, number, number];
 };
 
+type HistoryItem = {
+  cacheKey: string;
+  createdAt?: string | null;
+  demVersion?: string | null;
+  request?: {
+    observer?: {
+      lat: number;
+      lon: number;
+    };
+    observerHeightM?: number;
+    maxRadiusKm?: number;
+    resolutionM?: number;
+  } | null;
+  boundsLatLon?: [number, number, number, number] | null;
+};
+
 type Preset = {
   id: string;
   label: string;
@@ -102,6 +118,9 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [overlay, setOverlay] = useState<OverlayPayload | null>(null);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
 
   const matchedPreset = useMemo(() => {
     return (
@@ -203,6 +222,65 @@ export default function App() {
     );
   };
 
+  const fetchHistory = () => {
+    setIsHistoryLoading(true);
+    setHistoryError(null);
+    fetch(`${API_BASE_URL}/viewshed/history?limit=25`)
+      .then(async (response) => {
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || `History request failed with status ${response.status}`);
+        }
+        return response.json();
+      })
+      .then((data) => {
+        setHistory(Array.isArray(data.items) ? data.items : []);
+      })
+      .catch((error: Error) => {
+        setHistoryError(error.message || 'Unable to load history.');
+      })
+      .finally(() => {
+        setIsHistoryLoading(false);
+      });
+  };
+
+  const handleLoadHistory = (item: HistoryItem) => {
+    setIsSubmitting(true);
+    setSubmitError(null);
+    fetch(`${API_BASE_URL}/viewshed/cache/${item.cacheKey}`)
+      .then(async (response) => {
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || `Load failed with status ${response.status}`);
+        }
+        return response.json();
+      })
+      .then((data) => {
+        if (data.overlay) {
+          setOverlay(data.overlay);
+        }
+        const request = data.request ?? item.request;
+        if (request?.observer) {
+          const coords = { lat: request.observer.lat, lng: request.observer.lon };
+          setObserver(coords);
+          setMapCenter(coords);
+        }
+        if (request) {
+          setParams((current) => ({
+            observerHeightMeters: String(request.observerHeightM ?? current.observerHeightMeters),
+            maxRadiusKm: String(request.maxRadiusKm ?? current.maxRadiusKm),
+            resolutionMeters: String(request.resolutionM ?? current.resolutionMeters),
+          }));
+        }
+      })
+      .catch((error: Error) => {
+        setSubmitError(error.message || 'Unable to load cached viewshed.');
+      })
+      .finally(() => {
+        setIsSubmitting(false);
+      });
+  };
+
   const validateParams = (): FieldErrors => {
     const nextErrors: FieldErrors = {};
 
@@ -273,6 +351,10 @@ export default function App() {
   const observerText = observer
     ? `${observer.lat.toFixed(6)}, ${observer.lng.toFixed(6)}`
     : 'Not set';
+
+  useEffect(() => {
+    fetchHistory();
+  }, []);
 
   return (
     <div className="app">
@@ -398,6 +480,48 @@ export default function App() {
           ) : null}
           {submitError ? <div className="error form__error">{submitError}</div> : null}
         </form>
+      </section>
+
+      <section className="panel">
+        <div className="history">
+          <div className="history__header">
+            <h2>Recent Viewsheds</h2>
+            <button className="btn btn--ghost" type="button" onClick={fetchHistory} disabled={isHistoryLoading}>
+              {isHistoryLoading ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
+          {historyError ? <div className="error">{historyError}</div> : null}
+          {history.length === 0 && !historyError ? (
+            <div className="status">No cached viewsheds yet.</div>
+          ) : (
+            <ul className="history__list">
+              {history.map((item) => {
+                const createdAt = item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Unknown time';
+                const lat = item.request?.observer?.lat;
+                const lon = item.request?.observer?.lon;
+                const radius = item.request?.maxRadiusKm;
+                const resolution = item.request?.resolutionM;
+                return (
+                  <li key={item.cacheKey} className="history__item">
+                    <button className="history__button" type="button" onClick={() => handleLoadHistory(item)}>
+                      <div className="history__title">{createdAt}</div>
+                      <div className="history__meta">
+                        {lat !== undefined && lon !== undefined
+                          ? `${lat.toFixed(3)}, ${lon.toFixed(3)}`
+                          : 'Unknown location'}
+                      </div>
+                      <div className="history__meta">
+                        {radius !== undefined && resolution !== undefined
+                          ? `${radius} km · ${resolution} m`
+                          : 'Unknown params'}
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       </section>
 
       <section className="map">
