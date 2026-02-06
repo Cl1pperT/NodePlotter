@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import math
+import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
@@ -65,6 +66,7 @@ class ViewshedResponse(BaseModel):
   metadata: dict[str, Any]
   warnings: list[str]
   estimate: dict[str, Any]
+  timings: dict[str, float] | None = None
 
 
 class ViewshedHistoryItem(BaseModel):
@@ -127,7 +129,10 @@ def viewshed_cache(cache_key: str) -> ViewshedCacheResponse:
 
 
 @app.post("/viewshed", response_model=ViewshedResponse)
-def compute_viewshed_endpoint(payload: ViewshedRequest) -> ViewshedResponse:
+def compute_viewshed_endpoint(payload: ViewshedRequest, debug: int = Query(0, ge=0, le=1)) -> ViewshedResponse:
+  timings: dict[str, float] = {}
+  request_start = time.perf_counter()
+
   grid_side, cell_count = _estimate_grid(payload.maxRadiusKm, payload.resolutionM)
   warnings: list[str] = []
 
@@ -153,6 +158,7 @@ def compute_viewshed_endpoint(payload: ViewshedRequest) -> ViewshedResponse:
     radius_km=payload.maxRadiusKm,
     resolution_m=payload.resolutionM,
   )
+  timings["dem_version_s"] = time.perf_counter() - request_start
   cache_key = make_cache_key(
     observer_lat=payload.observer.lat,
     observer_lon=payload.observer.lon,
@@ -172,6 +178,7 @@ def compute_viewshed_endpoint(payload: ViewshedRequest) -> ViewshedResponse:
       "cellCount": cell_count,
       "cacheHit": True,
     }
+    timings["cache_hit_s"] = time.perf_counter() - request_start
     return ViewshedResponse(
       observer=payload.observer,
       maxRadiusKm=payload.maxRadiusKm,
@@ -179,8 +186,10 @@ def compute_viewshed_endpoint(payload: ViewshedRequest) -> ViewshedResponse:
       metadata=cached.metadata,
       warnings=warnings,
       estimate=estimate,
+      timings=timings if debug else None,
     )
 
+  dem_start = time.perf_counter()
   try:
     dem_result = get_dem(
       observer_lat=payload.observer.lat,
@@ -190,6 +199,7 @@ def compute_viewshed_endpoint(payload: ViewshedRequest) -> ViewshedResponse:
     )
   except Exception as exc:  # pragma: no cover - provider errors vary by environment
     raise HTTPException(status_code=502, detail=f"DEM provider error: {exc}") from exc
+  timings["dem_fetch_s"] = time.perf_counter() - dem_start
 
   dem = dem_result.elevation
   if dem.size == 0 or not (dem.shape[0] and dem.shape[1]):
@@ -205,7 +215,11 @@ def compute_viewshed_endpoint(payload: ViewshedRequest) -> ViewshedResponse:
     dem_result.crs,
     dem.shape,
   )
+  timings["dem_grid_rows"] = float(dem.shape[0])
+  timings["dem_grid_cols"] = float(dem.shape[1])
+  timings["dem_cell_size_m"] = float(cell_size_m)
 
+  compute_start = time.perf_counter()
   try:
     visibility = compute_viewshed_mask(
       dem,
@@ -215,14 +229,18 @@ def compute_viewshed_endpoint(payload: ViewshedRequest) -> ViewshedResponse:
     )
   except Exception as exc:
     raise HTTPException(status_code=400, detail=str(exc)) from exc
+  timings["viewshed_compute_s"] = time.perf_counter() - compute_start
 
+  encode_start = time.perf_counter()
   overlay_output = visibility_mask_to_png(
     mask=visibility,
     transform=dem_result.transform,
     crs=dem_result.crs,
   )
+  timings["encode_png_s"] = time.perf_counter() - encode_start
 
   overlay_payload, metadata_payload = _encode_overlay(overlay_output)
+  cache_start = time.perf_counter()
   store_cached_viewshed(
     cache_key=cache_key,
     png_bytes=overlay_output.png_bytes,
@@ -236,6 +254,8 @@ def compute_viewshed_endpoint(payload: ViewshedRequest) -> ViewshedResponse:
     },
     dem_version=dem_version,
   )
+  timings["cache_store_s"] = time.perf_counter() - cache_start
+  timings["total_s"] = time.perf_counter() - request_start
   estimate = {
     "gridSide": grid_side,
     "cellCount": cell_count,
@@ -249,6 +269,7 @@ def compute_viewshed_endpoint(payload: ViewshedRequest) -> ViewshedResponse:
     metadata=metadata_payload,
     warnings=warnings,
     estimate=estimate,
+    timings=timings if debug else None,
   )
 
 
