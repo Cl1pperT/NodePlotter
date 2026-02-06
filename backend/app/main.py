@@ -12,7 +12,7 @@ from pyproj import CRS, Transformer
 from app.cache import load_cached_viewshed, make_cache_key, store_cached_viewshed
 from app.dem import get_dem, get_dem_version
 from app.output import RasterOutput, visibility_mask_to_png
-from app.viewshed import compute_viewshed
+from app.viewshed import compute_viewshed as compute_viewshed_mask
 
 app = FastAPI(title="Local Viewshed Explorer API")
 
@@ -73,7 +73,7 @@ def health_check() -> dict:
 
 
 @app.post("/viewshed", response_model=ViewshedResponse)
-def compute_viewshed(payload: ViewshedRequest) -> ViewshedResponse:
+def compute_viewshed_endpoint(payload: ViewshedRequest) -> ViewshedResponse:
   grid_side, cell_count = _estimate_grid(payload.maxRadiusKm, payload.resolutionM)
   warnings: list[str] = []
 
@@ -153,7 +153,7 @@ def compute_viewshed(payload: ViewshedRequest) -> ViewshedResponse:
   )
 
   try:
-    visibility = compute_viewshed(
+    visibility = compute_viewshed_mask(
       dem,
       observer_rc=(observer_row, observer_col),
       observer_height_m=payload.observerHeightM,
