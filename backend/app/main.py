@@ -4,12 +4,12 @@ import base64
 import math
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from pyproj import CRS, Transformer
 
-from app.cache import load_cached_viewshed, make_cache_key, store_cached_viewshed
+from app.cache import load_cached_viewshed, make_cache_key, store_cached_viewshed, list_cached_viewsheds
 from app.dem import get_dem, get_dem_version
 from app.output import RasterOutput, visibility_mask_to_png
 from app.viewshed import compute_viewshed as compute_viewshed_mask
@@ -67,9 +67,27 @@ class ViewshedResponse(BaseModel):
   estimate: dict[str, Any]
 
 
+class ViewshedHistoryItem(BaseModel):
+  cacheKey: str
+  createdAt: str | None = None
+  demVersion: str | None = None
+  request: dict[str, Any] | None = None
+  boundsLatLon: list[float] | None = None
+
+
+class ViewshedHistoryResponse(BaseModel):
+  items: list[ViewshedHistoryItem]
+
+
 @app.get("/health")
 def health_check() -> dict:
   return {"status": "ok"}
+
+
+@app.get("/viewshed/history", response_model=ViewshedHistoryResponse)
+def viewshed_history(limit: int = Query(50, ge=1, le=500)) -> ViewshedHistoryResponse:
+  items = list_cached_viewsheds(limit=limit)
+  return ViewshedHistoryResponse(items=items)
 
 
 @app.post("/viewshed", response_model=ViewshedResponse)

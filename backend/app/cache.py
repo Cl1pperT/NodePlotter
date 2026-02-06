@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -96,6 +97,7 @@ def store_cached_viewshed(
   metadata_payload = {
     "cacheVersion": CACHE_VERSION,
     "demVersion": dem_version,
+    "createdAt": datetime.now(timezone.utc).isoformat(),
     "request": request_fingerprint,
     "overlay": {"boundsLatLon": list(overlay_bounds_latlon)},
     "metadata": metadata,
@@ -105,3 +107,53 @@ def store_cached_viewshed(
   tmp_metadata = metadata_path.with_suffix(".json.tmp")
   tmp_metadata.write_text(json.dumps(metadata_payload, sort_keys=True, indent=2))
   tmp_metadata.replace(metadata_path)
+
+
+def list_cached_viewsheds(limit: int = 50, cache_dir: Path | None = None) -> list[dict[str, Any]]:
+  root = cache_dir or DEFAULT_CACHE_DIR
+  if not root.exists():
+    return []
+
+  entries: list[dict[str, Any]] = []
+  for entry_dir in root.iterdir():
+    if not entry_dir.is_dir():
+      continue
+    metadata_path = entry_dir / "metadata.json"
+    if not metadata_path.exists():
+      continue
+    try:
+      payload = json.loads(metadata_path.read_text())
+    except Exception:
+      continue
+
+    created_at = payload.get("createdAt")
+    if not created_at:
+      try:
+        created_at = datetime.fromtimestamp(metadata_path.stat().st_mtime, tz=timezone.utc).isoformat()
+      except Exception:
+        created_at = None
+
+    overlay = payload.get("overlay") if isinstance(payload.get("overlay"), dict) else {}
+    request = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+
+    entries.append(
+      {
+        "cacheKey": entry_dir.name,
+        "createdAt": created_at,
+        "demVersion": payload.get("demVersion"),
+        "request": request,
+        "boundsLatLon": overlay.get("boundsLatLon"),
+      }
+    )
+
+  def sort_key(item: dict[str, Any]) -> float:
+    created_at = item.get("createdAt")
+    if not created_at:
+      return 0.0
+    try:
+      return datetime.fromisoformat(created_at.replace("Z", "+00:00")).timestamp()
+    except Exception:
+      return 0.0
+
+  entries.sort(key=sort_key, reverse=True)
+  return entries[: max(0, limit)]
