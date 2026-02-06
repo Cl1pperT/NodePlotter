@@ -120,6 +120,10 @@ body {
   gap: 0.5rem;
 }
 
+.form__group--full {
+  grid-column: 1 / -1;
+}
+
 .form__group label {
   font-size: 0.85rem;
   text-transform: uppercase;
@@ -137,6 +141,37 @@ body {
 .error {
   color: #b42318;
   font-size: 0.85rem;
+}
+
+.warning {
+  color: #b45309;
+  font-size: 0.85rem;
+}
+
+.estimate {
+  font-size: 0.95rem;
+  color: #2f2f2f;
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.preset-btn {
+  border: 1px solid #cfcac0;
+  background: transparent;
+  color: #1b1b1b;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.preset-btn--active {
+  border-color: #1b1b1b;
+  background: #1b1b1b;
+  color: #f6f4ef;
 }
 
 .form__actions {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import math
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -13,6 +14,10 @@ from app.output import RasterOutput, visibility_mask_to_png
 from app.viewshed import compute_viewshed
 
 app = FastAPI(title="Local Viewshed Explorer API")
+
+MAX_GRID_SIDE = 2000
+WARN_CELL_COUNT = 1_000_000
+MAX_CELL_COUNT = 4_000_000
 
 app.add_middleware(
   CORSMiddleware,
@@ -57,6 +62,8 @@ class ViewshedResponse(BaseModel):
   maxRadiusKm: float
   overlay: dict[str, Any]
   metadata: dict[str, Any]
+  warnings: list[str]
+  estimate: dict[str, Any]
 
 
 @app.get("/health")
@@ -66,6 +73,25 @@ def health_check() -> dict:
 
 @app.post("/viewshed", response_model=ViewshedResponse)
 def compute_viewshed(payload: ViewshedRequest) -> ViewshedResponse:
+  grid_side, cell_count = _estimate_grid(payload.maxRadiusKm, payload.resolutionM)
+  warnings: list[str] = []
+
+  if grid_side > MAX_GRID_SIDE or cell_count > MAX_CELL_COUNT:
+    raise HTTPException(
+      status_code=400,
+      detail=(
+        f"Requested grid {grid_side}x{grid_side} (~{cell_count:,} cells) exceeds "
+        f"limit {MAX_GRID_SIDE}x{MAX_GRID_SIDE} (~{MAX_CELL_COUNT:,} cells). "
+        "Reduce radius or increase resolution."
+      ),
+    )
+
+  if cell_count > WARN_CELL_COUNT:
+    warnings.append(
+      f"Large request: estimated grid {grid_side}x{grid_side} (~{cell_count:,} cells). "
+      "Computation may be slow."
+    )
+
   try:
     dem_result = get_dem(
       observer_lat=payload.observer.lat,
@@ -108,12 +134,18 @@ def compute_viewshed(payload: ViewshedRequest) -> ViewshedResponse:
   )
 
   overlay_payload, metadata_payload = _encode_overlay(overlay_output)
+  estimate = {
+    "gridSide": grid_side,
+    "cellCount": cell_count,
+  }
 
   return ViewshedResponse(
     observer=payload.observer,
     maxRadiusKm=payload.maxRadiusKm,
     overlay=overlay_payload,
     metadata=metadata_payload,
+    warnings=warnings,
+    estimate=estimate,
   )
 
 
@@ -158,3 +190,12 @@ def _encode_overlay(output: RasterOutput) -> tuple[dict[str, Any], dict[str, Any
     "height": output.metadata.height,
   }
   return overlay, metadata
+
+
+def _estimate_grid(radius_km: float, resolution_m: float) -> tuple[int, int]:
+  if resolution_m <= 0:
+    return (0, 0)
+  radius_m = radius_km * 1000.0
+  grid_side = int(math.ceil((2 * radius_m) / resolution_m) + 1)
+  cell_count = grid_side * grid_side
+  return grid_side, cell_count

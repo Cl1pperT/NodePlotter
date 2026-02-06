@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { LatLngLiteral } from 'leaflet';
 import L from 'leaflet';
-import { GeoJSON, MapContainer, Marker, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import { ImageOverlay, MapContainer, Marker, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
 import iconUrl from 'leaflet/dist/images/marker-icon.png';
 import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
@@ -15,6 +15,9 @@ L.Icon.Default.mergeOptions({
 const DEFAULT_CENTER: LatLngLiteral = { lat: 20, lng: 0 };
 const DEFAULT_ZOOM = 2;
 const API_BASE_URL = 'http://localhost:8000';
+const WARN_CELL_COUNT = 1_000_000;
+const MAX_CELL_COUNT = 4_000_000;
+const MAX_GRID_SIDE = 2000;
 
 type ObserverState = {
   lat: number;
@@ -27,7 +30,44 @@ type ParamsState = {
   resolutionMeters: string;
 };
 
-type FieldErrors = Partial<Record<keyof ParamsState | 'observer', string>>;
+type FieldErrors = Partial<Record<keyof ParamsState | 'observer' | 'guardrail', string>>;
+
+type OverlayPayload = {
+  pngBase64: string;
+  boundsLatLon: [number, number, number, number];
+};
+
+type Preset = {
+  id: string;
+  label: string;
+  observerHeightMeters: string;
+  maxRadiusKm: string;
+  resolutionMeters: string;
+};
+
+const PRESETS: Preset[] = [
+  {
+    id: 'fast',
+    label: 'Fast',
+    observerHeightMeters: '1.7',
+    maxRadiusKm: '10',
+    resolutionMeters: '90',
+  },
+  {
+    id: 'medium',
+    label: 'Medium',
+    observerHeightMeters: '1.7',
+    maxRadiusKm: '25',
+    resolutionMeters: '60',
+  },
+  {
+    id: 'high',
+    label: 'High',
+    observerHeightMeters: '1.7',
+    maxRadiusKm: '50',
+    resolutionMeters: '30',
+  },
+];
 
 function MapClickHandler({ onSelect }: { onSelect: (coords: ObserverState) => void }) {
   useMapEvents({
@@ -61,7 +101,18 @@ export default function App() {
   const [errors, setErrors] = useState<FieldErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [overlay, setOverlay] = useState<any | null>(null);
+  const [overlay, setOverlay] = useState<OverlayPayload | null>(null);
+
+  const matchedPreset = useMemo(() => {
+    return (
+      PRESETS.find(
+        (preset) =>
+          preset.observerHeightMeters === params.observerHeightMeters &&
+          preset.maxRadiusKm === params.maxRadiusKm &&
+          preset.resolutionMeters === params.resolutionMeters
+      ) ?? null
+    );
+  }, [params]);
 
   const observerForApi = useMemo(
     () =>
@@ -87,8 +138,45 @@ export default function App() {
     };
   }, [observerForApi, params]);
 
+  const estimate = useMemo(() => {
+    const radiusKm = Number(params.maxRadiusKm);
+    const resolutionM = Number(params.resolutionMeters);
+    if (!Number.isFinite(radiusKm) || radiusKm <= 0) {
+      return null;
+    }
+    if (!Number.isFinite(resolutionM) || resolutionM <= 0) {
+      return null;
+    }
+    const radiusM = radiusKm * 1000;
+    const gridSide = Math.ceil((2 * radiusM) / resolutionM) + 1;
+    const cellCount = gridSide * gridSide;
+    return { gridSide, cellCount };
+  }, [params.maxRadiusKm, params.resolutionMeters]);
+
+  const guardrail = useMemo(() => {
+    if (!estimate) {
+      return { blocked: false, warnings: [] as string[] };
+    }
+    const warnings: string[] = [];
+    if (estimate.cellCount > WARN_CELL_COUNT) {
+      warnings.push(
+        `Large request: ${estimate.gridSide}x${estimate.gridSide} (~${estimate.cellCount.toLocaleString()} cells).`
+      );
+    }
+    const blocked = estimate.cellCount > MAX_CELL_COUNT || estimate.gridSide > MAX_GRID_SIDE;
+    return { blocked, warnings };
+  }, [estimate]);
+
   const handleParamChange = (field: keyof ParamsState, value: string) => {
     setParams((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handlePresetSelect = (preset: Preset) => {
+    setParams({
+      observerHeightMeters: preset.observerHeightMeters,
+      maxRadiusKm: preset.maxRadiusKm,
+      resolutionMeters: preset.resolutionMeters,
+    });
   };
 
   const handleUseMyLocation = () => {
@@ -137,6 +225,10 @@ export default function App() {
       nextErrors.resolutionMeters = 'Enter a positive resolution in meters.';
     }
 
+    if (estimate && guardrail.blocked) {
+      nextErrors.guardrail = `Requested grid ${estimate.gridSide}x${estimate.gridSide} (~${estimate.cellCount.toLocaleString()} cells) exceeds limits.`;
+    }
+
     return nextErrors;
   };
 
@@ -168,7 +260,7 @@ export default function App() {
         return response.json();
       })
       .then((data) => {
-        setOverlay(data.polygon ?? null);
+        setOverlay(data.overlay ?? null);
       })
       .catch((error: Error) => {
         setSubmitError(error.message || 'Unable to compute viewshed.');
@@ -214,6 +306,21 @@ export default function App() {
 
       <section className="panel">
         <form className="form" onSubmit={handleSubmit}>
+          <div className="form__group form__group--full">
+            <label>Presets</label>
+            <div className="presets">
+              {PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className={`preset-btn${matchedPreset?.id === preset.id ? ' preset-btn--active' : ''}`}
+                  onClick={() => handlePresetSelect(preset)}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="form__group">
             <label htmlFor="observerHeightMeters">Observer Height (meters)</label>
             <input
@@ -256,8 +363,22 @@ export default function App() {
             />
             {errors.resolutionMeters ? <div className="error">{errors.resolutionMeters}</div> : null}
           </div>
+          <div className="form__group form__group--full">
+            <label>Estimate</label>
+            <div className="estimate">
+              {estimate
+                ? `Grid ${estimate.gridSide}x${estimate.gridSide} (~${estimate.cellCount.toLocaleString()} cells)`
+                : 'Enter radius and resolution to estimate grid size.'}
+            </div>
+            {guardrail.warnings.map((warning) => (
+              <div key={warning} className="warning">
+                {warning}
+              </div>
+            ))}
+            {errors.guardrail ? <div className="error">{errors.guardrail}</div> : null}
+          </div>
           <div className="form__actions">
-            <button className="btn" type="submit" disabled={isSubmitting}>
+            <button className="btn" type="submit" disabled={isSubmitting || guardrail.blocked}>
               {isSubmitting ? 'Submitting...' : 'Compute Viewshed'}
             </button>
             <button
@@ -283,14 +404,13 @@ export default function App() {
           />
           {observer ? <Marker position={observer} /> : null}
           {overlay ? (
-            <GeoJSON
-              data={overlay}
-              style={{
-                color: '#2563eb',
-                weight: 2,
-                fillColor: '#60a5fa',
-                fillOpacity: 0.35,
-              }}
+            <ImageOverlay
+              url={`data:image/png;base64,${overlay.pngBase64}`}
+              bounds={[
+                [overlay.boundsLatLon[0], overlay.boundsLatLon[1]],
+                [overlay.boundsLatLon[2], overlay.boundsLatLon[3]],
+              ]}
+              opacity={1}
             />
           ) : null}
         </MapContainer>
