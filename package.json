@@ -7,6 +7,7 @@
   ],
   "scripts": {
     "dev:frontend": "npm run dev -w frontend",
-    "dev:backend": "cd backend && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+    "dev:backend": "cd backend && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev": "./scripts/dev.sh"
   }
 }
