@@ -100,7 +100,9 @@ class TerrariumProvider(DemProvider):
     tile_count: int
     tiles_downloaded: int
     tiles_cached: int
+    tiles_failed: int
     tile_range: tuple[int, int, int, int]
+    failed_tiles: list[tuple[int, int]]
 
   def prefetch_bbox(
     self,
@@ -110,18 +112,28 @@ class TerrariumProvider(DemProvider):
     max_lon: float,
     resolution_m: float,
   ) -> "TerrariumProvider.PrefetchStats":
-    lat_for_zoom = min(min_lat, max_lat)
-    zoom = self._choose_zoom(lat_for_zoom, resolution_m)
-    min_x, max_x, min_y, max_y = self._tile_range(min_lat, min_lon, max_lat, max_lon, zoom)
+    zoom, min_x, max_x, min_y, max_y = self.tile_range_for_bbox(
+      min_lat=min_lat,
+      min_lon=min_lon,
+      max_lat=max_lat,
+      max_lon=max_lon,
+      resolution_m=resolution_m,
+    )
 
     tiles_downloaded = 0
     tiles_cached = 0
+    tiles_failed = 0
+    failed_tiles: list[tuple[int, int]] = []
     for ty in range(min_y, max_y + 1):
       for tx in range(min_x, max_x + 1):
-        if self._ensure_tile(zoom, tx, ty):
+        status = self.fetch_tile(zoom, tx, ty)
+        if status == "downloaded":
           tiles_downloaded += 1
-        else:
+        elif status == "cached":
           tiles_cached += 1
+        else:
+          tiles_failed += 1
+          failed_tiles.append((tx, ty))
 
     tile_count = (max_x - min_x + 1) * (max_y - min_y + 1)
     return TerrariumProvider.PrefetchStats(
@@ -129,8 +141,23 @@ class TerrariumProvider(DemProvider):
       tile_count=tile_count,
       tiles_downloaded=tiles_downloaded,
       tiles_cached=tiles_cached,
+      tiles_failed=tiles_failed,
       tile_range=(min_x, max_x, min_y, max_y),
+      failed_tiles=failed_tiles,
     )
+
+  def tile_range_for_bbox(
+    self,
+    min_lat: float,
+    min_lon: float,
+    max_lat: float,
+    max_lon: float,
+    resolution_m: float,
+  ) -> tuple[int, int, int, int, int]:
+    lat_for_zoom = min(min_lat, max_lat)
+    zoom = self._choose_zoom(lat_for_zoom, resolution_m)
+    min_x, max_x, min_y, max_y = self._tile_range(min_lat, min_lon, max_lat, max_lon, zoom)
+    return zoom, min_x, max_x, min_y, max_y
 
   def _choose_zoom(self, lat: float, resolution_m: float) -> int:
     lat_clamped = max(min(lat, MAX_LAT), -MAX_LAT)
@@ -195,19 +222,25 @@ class TerrariumProvider(DemProvider):
     elevation = (r * 256.0 + g + b / 256.0) - 32768.0
     return elevation.astype(np.float32)
 
-  def _ensure_tile(self, zoom: int, x: int, y: int) -> bool:
+  def fetch_tile(self, zoom: int, x: int, y: int) -> str:
     tile_path = self._get_tile_path(zoom, x, y)
     if tile_path.exists():
-      return False
+      return "cached"
     tile_path.parent.mkdir(parents=True, exist_ok=True)
     url = self.tile_url.format(z=zoom, x=x, y=y)
-    response = requests.get(url, timeout=20)
-    if response.status_code != 200:
-      return False
-    tmp_path = tile_path.with_suffix(".tmp")
-    tmp_path.write_bytes(response.content)
-    tmp_path.replace(tile_path)
-    return True
+    try:
+      response = requests.get(url, timeout=20)
+      if response.status_code != 200:
+        return "failed"
+      tmp_path = tile_path.with_suffix(".tmp")
+      tmp_path.write_bytes(response.content)
+      tmp_path.replace(tile_path)
+      return "downloaded"
+    except requests.RequestException:
+      return "failed"
+
+  def _ensure_tile(self, zoom: int, x: int, y: int) -> bool:
+    return self.fetch_tile(zoom, x, y) != "failed"
 
   def _get_tile_path(self, zoom: int, x: int, y: int) -> Path:
     return self.cache_dir / str(zoom) / str(x) / f"{y}.png"
