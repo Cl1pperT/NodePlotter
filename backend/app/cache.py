@@ -8,7 +8,7 @@ from typing import Any
 
 
 CACHE_VERSION = "v1"
-DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "viewshed"
+DEFAULT_CACHE_DIR = Path.home() / "Downloads" / "LocalViewshedExplorer" / "data" / "viewshed"
 
 
 @dataclass(frozen=True)
