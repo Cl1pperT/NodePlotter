@@ -6,3 +6,4 @@ Pillow>=10.2
 affine>=2.4
 pyproj>=3.6
 pytest>=8.0
+websockets>=11,<12
