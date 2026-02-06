@@ -6,10 +6,14 @@ import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
 import iconUrl from 'leaflet/dist/images/marker-icon.png';
 import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
 
-L.Icon.Default.mergeOptions({
+const DEFAULT_MARKER_ICON = L.icon({
   iconRetinaUrl,
   iconUrl,
   shadowUrl,
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
 });
 
 const DEFAULT_CENTER: LatLngLiteral = { lat: 20, lng: 0 };
@@ -532,7 +536,7 @@ export default function App() {
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
-          {observer ? <Marker position={observer} /> : null}
+          {observer ? <Marker position={observer} icon={DEFAULT_MARKER_ICON} /> : null}
           {overlay ? (
             <ImageOverlay
               url={`data:image/png;base64,${overlay.pngBase64}`}
