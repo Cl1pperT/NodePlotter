@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-import math
+import base64
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
+from pyproj import CRS, Transformer
+
+from app.dem import get_dem
+from app.output import RasterOutput, visibility_mask_to_png
+from app.viewshed import compute_viewshed
 
 app = FastAPI(title="Local Viewshed Explorer API")
 
@@ -50,25 +55,8 @@ class ViewshedRequest(BaseModel):
 class ViewshedResponse(BaseModel):
   observer: Observer
   maxRadiusKm: float
-  polygon: dict[str, Any]
-
-
-def build_circle_polygon(lat: float, lon: float, radius_km: float, points: int = 64) -> dict[str, Any]:
-  lat_rad = math.radians(lat)
-  km_per_deg_lat = 110.574
-  km_per_deg_lon = max(111.320 * math.cos(lat_rad), 1e-6)
-  coords: list[list[float]] = []
-
-  for i in range(points + 1):
-    angle = 2 * math.pi * i / points
-    dlat = (radius_km * math.sin(angle)) / km_per_deg_lat
-    dlon = (radius_km * math.cos(angle)) / km_per_deg_lon
-    coords.append([lon + dlon, lat + dlat])
-
-  return {
-    "type": "Polygon",
-    "coordinates": [coords],
-  }
+  overlay: dict[str, Any]
+  metadata: dict[str, Any]
 
 
 @app.get("/health")
@@ -78,14 +66,95 @@ def health_check() -> dict:
 
 @app.post("/viewshed", response_model=ViewshedResponse)
 def compute_viewshed(payload: ViewshedRequest) -> ViewshedResponse:
-  polygon = build_circle_polygon(
-    lat=payload.observer.lat,
-    lon=payload.observer.lon,
-    radius_km=payload.maxRadiusKm,
+  try:
+    dem_result = get_dem(
+      observer_lat=payload.observer.lat,
+      observer_lon=payload.observer.lon,
+      radius_km=payload.maxRadiusKm,
+      resolution_m=payload.resolutionM,
+    )
+  except Exception as exc:  # pragma: no cover - provider errors vary by environment
+    raise HTTPException(status_code=502, detail=f"DEM provider error: {exc}") from exc
+
+  dem = dem_result.elevation
+  if dem.size == 0 or not (dem.shape[0] and dem.shape[1]):
+    raise HTTPException(status_code=500, detail="DEM response is empty.")
+
+  if not (dem == dem).any():
+    raise HTTPException(status_code=502, detail="DEM provider returned no valid data for this area.")
+
+  observer_row, observer_col, cell_size_m = _observer_pixel_and_cell_size(
+    payload.observer.lat,
+    payload.observer.lon,
+    dem_result.transform,
+    dem_result.crs,
+    dem.shape,
   )
+
+  try:
+    visibility = compute_viewshed(
+      dem,
+      observer_rc=(observer_row, observer_col),
+      observer_height_m=payload.observerHeightM,
+      cell_size_m=cell_size_m,
+    )
+  except Exception as exc:
+    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+  overlay_output = visibility_mask_to_png(
+    mask=visibility,
+    transform=dem_result.transform,
+    crs=dem_result.crs,
+  )
+
+  overlay_payload, metadata_payload = _encode_overlay(overlay_output)
 
   return ViewshedResponse(
     observer=payload.observer,
     maxRadiusKm=payload.maxRadiusKm,
-    polygon=polygon,
+    overlay=overlay_payload,
+    metadata=metadata_payload,
   )
+
+
+def _observer_pixel_and_cell_size(
+  lat: float,
+  lon: float,
+  transform,
+  crs: str,
+  shape: tuple[int, int],
+) -> tuple[int, int, float]:
+  transformer = Transformer.from_crs("EPSG:4326", CRS.from_user_input(crs), always_xy=True)
+  x, y = transformer.transform(lon, lat)
+  inv = ~transform
+  col_f, row_f = inv * (x, y)
+  row = int(round(row_f))
+  col = int(round(col_f))
+  rows, cols = shape
+
+  if row < 0 or row >= rows or col < 0 or col >= cols:
+    raise HTTPException(status_code=400, detail="Observer location is outside DEM coverage.")
+
+  cell_size_x = float(abs(transform.a))
+  cell_size_y = float(abs(transform.e))
+  cell_size_m = (cell_size_x + cell_size_y) / 2.0
+  if cell_size_m <= 0:
+    raise HTTPException(status_code=500, detail="DEM cell size is invalid.")
+
+  return row, col, cell_size_m
+
+
+def _encode_overlay(output: RasterOutput) -> tuple[dict[str, Any], dict[str, Any]]:
+  png_base64 = base64.b64encode(output.png_bytes).decode("ascii")
+  overlay = {
+    "pngBase64": png_base64,
+    "boundsLatLon": output.metadata.bounds_latlon,
+  }
+  metadata = {
+    "crs": output.metadata.crs,
+    "bounds": output.metadata.bounds,
+    "boundsLatLon": output.metadata.bounds_latlon,
+    "width": output.metadata.width,
+    "height": output.metadata.height,
+  }
+  return overlay, metadata
