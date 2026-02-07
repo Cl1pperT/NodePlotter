@@ -54,6 +54,33 @@ def make_cache_key(
   return hashlib.sha256(encoded).hexdigest()
 
 
+def make_cache_key_multi(
+  observers: list[dict[str, float]],
+  observer_height_m: float,
+  max_radius_km: float,
+  resolution_m: float,
+  dem_version: str,
+  algorithm: str = "accurate",
+) -> str:
+  sorted_observers = sorted(observers, key=lambda item: (item["lat"], item["lon"]))
+  payload = {
+    "cacheVersion": CACHE_VERSION,
+    "demVersion": dem_version,
+    "request": {
+      "observers": [
+        {"lat": float(entry["lat"]), "lon": float(entry["lon"])} for entry in sorted_observers
+      ],
+      "observerHeightM": float(observer_height_m),
+      "maxRadiusKm": float(max_radius_km),
+      "resolutionM": float(resolution_m),
+      "mode": algorithm,
+    },
+  }
+
+  encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+  return hashlib.sha256(encoded).hexdigest()
+
+
 def load_cached_viewshed(cache_key: str, cache_dir: Path | None = None) -> CachedOverlay | None:
   root = cache_dir or DEFAULT_CACHE_DIR
   entry_dir = root / cache_key

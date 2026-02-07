@@ -84,6 +84,54 @@ class TerrariumProvider(DemProvider):
 
     return DemResult(elevation=mosaic, transform=transform, crs="EPSG:3857", metadata=metadata)
 
+  def get_dem_for_bbox(
+    self,
+    min_lat: float,
+    min_lon: float,
+    max_lat: float,
+    max_lon: float,
+    resolution_m: float,
+  ) -> DemResult:
+    zoom, min_tile_x, max_tile_x, min_tile_y, max_tile_y = self.tile_range_for_bbox(
+      min_lat=min_lat,
+      min_lon=min_lon,
+      max_lat=max_lat,
+      max_lon=max_lon,
+      resolution_m=resolution_m,
+    )
+
+    width_tiles = max_tile_x - min_tile_x + 1
+    height_tiles = max_tile_y - min_tile_y + 1
+    width_px = width_tiles * TILE_SIZE
+    height_px = height_tiles * TILE_SIZE
+
+    mosaic = np.full((height_px, width_px), np.nan, dtype=np.float32)
+
+    for ty in range(min_tile_y, max_tile_y + 1):
+      for tx in range(min_tile_x, max_tile_x + 1):
+        tile = self._load_tile(zoom, tx, ty)
+        if tile is None:
+          continue
+        y_offset = (ty - min_tile_y) * TILE_SIZE
+        x_offset = (tx - min_tile_x) * TILE_SIZE
+        mosaic[y_offset : y_offset + TILE_SIZE, x_offset : x_offset + TILE_SIZE] = tile
+
+    transform = self._mosaic_transform(min_tile_x, min_tile_y, zoom)
+
+    metadata: dict[str, Any] = {
+      "zoom": zoom,
+      "tile_range": {
+        "min_x": min_tile_x,
+        "max_x": max_tile_x,
+        "min_y": min_tile_y,
+        "max_y": max_tile_y,
+      },
+      "tile_url": self.tile_url,
+      "version": f"terrarium:z{zoom}:{self.tile_url}",
+    }
+
+    return DemResult(elevation=mosaic, transform=transform, crs="EPSG:3857", metadata=metadata)
+
   def version_for_request(
     self,
     observer_lat: float,
@@ -92,6 +140,23 @@ class TerrariumProvider(DemProvider):
     resolution_m: float,
   ) -> str:
     zoom = self._choose_zoom(observer_lat, resolution_m)
+    return f"terrarium:z{zoom}:{self.tile_url}"
+
+  def version_for_bbox(
+    self,
+    min_lat: float,
+    min_lon: float,
+    max_lat: float,
+    max_lon: float,
+    resolution_m: float,
+  ) -> str:
+    zoom, _, _, _, _ = self.tile_range_for_bbox(
+      min_lat=min_lat,
+      min_lon=min_lon,
+      max_lat=max_lat,
+      max_lon=max_lon,
+      resolution_m=resolution_m,
+    )
     return f"terrarium:z{zoom}:{self.tile_url}"
 
   @dataclass(frozen=True)

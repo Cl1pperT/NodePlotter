@@ -19,7 +19,7 @@ const DEFAULT_MARKER_ICON = L.icon({
 const DEFAULT_CENTER: LatLngLiteral = { lat: 20, lng: 0 };
 // Approx. 25 miles across on a typical laptop viewport.
 const DEFAULT_ZOOM = 11;
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 const WARN_CELL_COUNT = 1_000_000;
 const MAX_CELL_COUNT = 4_000_000;
 const MAX_GRID_SIDE = 2000;
@@ -35,7 +35,7 @@ type ParamsState = {
   resolutionMeters: string;
 };
 
-type FieldErrors = Partial<Record<keyof ParamsState | 'observer' | 'guardrail', string>>;
+type FieldErrors = Partial<Record<keyof ParamsState | 'observer' | 'observers' | 'guardrail', string>>;
 
 type OverlayPayload = {
   pngBase64: string;
@@ -53,6 +53,10 @@ type HistoryItem = {
       lat: number;
       lon: number;
     };
+    observers?: {
+      lat: number;
+      lon: number;
+    }[];
     observerHeightM?: number;
     maxRadiusKm?: number;
     resolutionM?: number;
@@ -115,6 +119,8 @@ function MapViewController({ center }: { center: LatLngLiteral }) {
 
 export default function App() {
   const [observer, setObserver] = useState<ObserverState | null>(null);
+  const [multiObservers, setMultiObservers] = useState<ObserverState[]>([]);
+  const [isMultiMode, setIsMultiMode] = useState(false);
   const [mapCenter, setMapCenter] = useState<LatLngLiteral>(DEFAULT_CENTER);
   const [status, setStatus] = useState<string | null>(null);
   const [params, setParams] = useState<ParamsState>({
@@ -154,7 +160,28 @@ export default function App() {
     [observer]
   );
 
+  const observersForApi = useMemo(
+    () =>
+      multiObservers.map((entry) => ({
+        lat: entry.lat,
+        lon: entry.lng,
+      })),
+    [multiObservers]
+  );
+
   const payloadPreview = useMemo(() => {
+    if (isMultiMode) {
+      if (observersForApi.length === 0) {
+        return null;
+      }
+      return {
+        observers: observersForApi,
+        observerHeightM: Number(params.observerHeightMeters),
+        maxRadiusKm: Number(params.maxRadiusKm),
+        resolutionM: Number(params.resolutionMeters),
+      };
+    }
+
     if (!observerForApi) {
       return null;
     }
@@ -165,7 +192,7 @@ export default function App() {
       maxRadiusKm: Number(params.maxRadiusKm),
       resolutionM: Number(params.resolutionMeters),
     };
-  }, [observerForApi, params]);
+  }, [isMultiMode, observerForApi, observersForApi, params]);
 
   const estimate = useMemo(() => {
     const radiusKm = Number(params.maxRadiusKm);
@@ -177,10 +204,34 @@ export default function App() {
       return null;
     }
     const radiusM = radiusKm * 1000;
+
+    if (isMultiMode && multiObservers.length > 0) {
+      let minX = Number.POSITIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+
+      multiObservers.forEach((point) => {
+        const projected = L.CRS.EPSG3857.project(L.latLng(point.lat, point.lng));
+        minX = Math.min(minX, projected.x - radiusM);
+        minY = Math.min(minY, projected.y - radiusM);
+        maxX = Math.max(maxX, projected.x + radiusM);
+        maxY = Math.max(maxY, projected.y + radiusM);
+      });
+
+      const widthM = maxX - minX;
+      const heightM = maxY - minY;
+      const gridWidth = Math.ceil(widthM / resolutionM) + 1;
+      const gridHeight = Math.ceil(heightM / resolutionM) + 1;
+      const gridSide = Math.max(gridWidth, gridHeight);
+      const cellCount = gridWidth * gridHeight;
+      return { gridWidth, gridHeight, gridSide, cellCount };
+    }
+
     const gridSide = Math.ceil((2 * radiusM) / resolutionM) + 1;
     const cellCount = gridSide * gridSide;
-    return { gridSide, cellCount };
-  }, [params.maxRadiusKm, params.resolutionMeters]);
+    return { gridWidth: gridSide, gridHeight: gridSide, gridSide, cellCount };
+  }, [isMultiMode, multiObservers, params.maxRadiusKm, params.resolutionMeters]);
 
   const guardrail = useMemo(() => {
     if (!estimate) {
@@ -208,6 +259,33 @@ export default function App() {
     });
   };
 
+  const addObserverPoint = (coords: ObserverState) => {
+    setMultiObservers((current) => {
+      const exists = current.some(
+        (point) => Math.abs(point.lat - coords.lat) < 1e-6 && Math.abs(point.lng - coords.lng) < 1e-6
+      );
+      if (exists) {
+        return current;
+      }
+      return [...current, coords];
+    });
+    setMapCenter(coords);
+  };
+
+  const handleMapTypeChange = (nextIsMulti: boolean) => {
+    setIsMultiMode(nextIsMulti);
+    if (nextIsMulti) {
+      if (observer) {
+        setMultiObservers((current) => (current.length === 0 ? [observer] : current));
+      }
+      return;
+    }
+    if (multiObservers.length > 0) {
+      setObserver(multiObservers[0]);
+      setMapCenter(multiObservers[0]);
+    }
+  };
+
   const handleUseMyLocation = () => {
     if (!navigator.geolocation) {
       setStatus('Geolocation is not supported in this browser.');
@@ -221,8 +299,12 @@ export default function App() {
           lat: position.coords.latitude,
           lng: position.coords.longitude,
         };
-        setObserver(coords);
-        setMapCenter(coords);
+        if (isMultiMode) {
+          addObserverPoint(coords);
+        } else {
+          setObserver(coords);
+          setMapCenter(coords);
+        }
         setStatus(null);
       },
       (error) => {
@@ -230,6 +312,23 @@ export default function App() {
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
+  };
+
+  const handleMapSelect = (coords: ObserverState) => {
+    if (isMultiMode) {
+      addObserverPoint(coords);
+      return;
+    }
+    setObserver(coords);
+    setMapCenter(coords);
+  };
+
+  const handleRemoveObserver = (index: number) => {
+    setMultiObservers((current) => current.filter((_, idx) => idx !== index));
+  };
+
+  const handleClearObservers = () => {
+    setMultiObservers([]);
   };
 
   const fetchHistory = () => {
@@ -270,8 +369,16 @@ export default function App() {
           setOverlay(data.overlay);
         }
         const request = data.request ?? item.request;
-        if (request?.observer) {
+        if (request?.observers && request.observers.length > 0) {
+          const coordsList = request.observers.map((entry) => ({ lat: entry.lat, lng: entry.lon }));
+          setIsMultiMode(true);
+          setMultiObservers(coordsList);
+          if (coordsList.length > 0) {
+            setMapCenter(coordsList[0]);
+          }
+        } else if (request?.observer) {
           const coords = { lat: request.observer.lat, lng: request.observer.lon };
+          setIsMultiMode(false);
           setObserver(coords);
           setMapCenter(coords);
         }
@@ -322,7 +429,11 @@ export default function App() {
   const validateParams = (): FieldErrors => {
     const nextErrors: FieldErrors = {};
 
-    if (!observer) {
+    if (isMultiMode) {
+      if (multiObservers.length < 2) {
+        nextErrors.observers = 'Select at least two points for a complex map.';
+      }
+    } else if (!observer) {
       nextErrors.observer = 'Pick a location on the map or use your current location.';
     }
 
@@ -361,7 +472,8 @@ export default function App() {
     setSubmitError(null);
     setOverlay(null);
 
-    fetch(`${API_BASE_URL}/viewshed?mode=${computeMode}`, {
+    const endpoint = isMultiMode ? 'viewshed/multi' : 'viewshed';
+    fetch(`${API_BASE_URL}/${endpoint}?mode=${computeMode}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -386,9 +498,13 @@ export default function App() {
       });
   };
 
-  const observerText = observer
+  const observerText = isMultiMode
+    ? `${multiObservers.length} point${multiObservers.length === 1 ? '' : 's'} selected`
+    : observer
     ? `${observer.lat.toFixed(6)}, ${observer.lng.toFixed(6)}`
     : 'Not set';
+
+  const markers = isMultiMode ? multiObservers : observer ? [observer] : [];
 
   useEffect(() => {
     fetchHistory();
@@ -410,16 +526,55 @@ export default function App() {
         <div>
           <h2>Observer</h2>
           <div className="panel__row">
-            <span className="label">Lat/Lon</span>
+            <span className="label">{isMultiMode ? 'Points' : 'Lat/Lon'}</span>
             <span className="value">{observerText}</span>
           </div>
+          {isMultiMode ? (
+            <div className="points">
+              {multiObservers.length === 0 ? (
+                <div className="status">No points yet. Click the map to add observer points.</div>
+              ) : (
+                <div className="points__list">
+                  {multiObservers.map((point, index) => (
+                    <div key={`${point.lat}-${point.lng}-${index}`} className="points__item">
+                      <span className="points__meta">
+                        {point.lat.toFixed(5)}, {point.lng.toFixed(5)}
+                      </span>
+                      <button
+                        type="button"
+                        className="points__remove"
+                        onClick={() => handleRemoveObserver(index)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="points__actions">
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  onClick={handleClearObservers}
+                  disabled={multiObservers.length === 0}
+                >
+                  Clear Points
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {errors.observers ? <div className="status">{errors.observers}</div> : null}
           {errors.observer ? <div className="status">{errors.observer}</div> : null}
           {status ? <div className="status">{status}</div> : null}
         </div>
         <div>
           <h2>API Payload</h2>
           <pre className="code">
-{payloadPreview ? JSON.stringify(payloadPreview, null, 2) : '// Awaiting observer location'}
+{payloadPreview
+  ? JSON.stringify(payloadPreview, null, 2)
+  : isMultiMode
+  ? '// Awaiting observer points'
+  : '// Awaiting observer location'}
           </pre>
         </div>
       </section>
@@ -439,6 +594,25 @@ export default function App() {
                   {preset.label}
                 </button>
               ))}
+            </div>
+          </div>
+          <div className="form__group form__group--full">
+            <label>Map Type</label>
+            <div className="presets">
+              <button
+                type="button"
+                className={`preset-btn${!isMultiMode ? ' preset-btn--active' : ''}`}
+                onClick={() => handleMapTypeChange(false)}
+              >
+                Single
+              </button>
+              <button
+                type="button"
+                className={`preset-btn${isMultiMode ? ' preset-btn--active' : ''}`}
+                onClick={() => handleMapTypeChange(true)}
+              >
+                Complex
+              </button>
             </div>
           </div>
           <div className="form__group form__group--full">
@@ -506,7 +680,7 @@ export default function App() {
             <label>Estimate</label>
             <div className="estimate">
               {estimate
-                ? `Grid ${estimate.gridSide}x${estimate.gridSide} (~${estimate.cellCount.toLocaleString()} cells)`
+                ? `Grid ${estimate.gridWidth}x${estimate.gridHeight} (~${estimate.cellCount.toLocaleString()} cells)`
                 : 'Enter radius and resolution to estimate grid size.'}
             </div>
             {guardrail.warnings.map((warning) => (
@@ -518,7 +692,7 @@ export default function App() {
           </div>
           <div className="form__actions">
             <button className="btn" type="submit" disabled={isSubmitting || guardrail.blocked}>
-              {isSubmitting ? 'Submitting...' : 'Compute Viewshed'}
+              {isSubmitting ? 'Submitting...' : isMultiMode ? 'Compute Complex Map' : 'Compute Viewshed'}
             </button>
             <button
               className="btn btn--ghost"
@@ -565,17 +739,21 @@ export default function App() {
                 <ul className="history__list">
                   {history.map((item) => {
                     const createdAt = item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Unknown time';
-                    const lat = item.request?.observer?.lat;
-                    const lon = item.request?.observer?.lon;
+                    const observers = item.request?.observers ?? null;
+                    const lat = observers && observers.length > 0 ? observers[0].lat : item.request?.observer?.lat;
+                    const lon = observers && observers.length > 0 ? observers[0].lon : item.request?.observer?.lon;
                     const radius = item.request?.maxRadiusKm;
                     const resolution = item.request?.resolutionM;
                     const mode = item.request?.mode;
+                    const isMulti = Boolean(observers && observers.length > 0);
                     return (
                       <li key={item.cacheKey} className="history__item">
                         <button className="history__button" type="button" onClick={() => handleLoadHistory(item)}>
                           <div className="history__title">{createdAt}</div>
                           <div className="history__meta">
-                            {lat !== undefined && lon !== undefined
+                            {isMulti
+                              ? `Multi (${observers?.length ?? 0} points)`
+                              : lat !== undefined && lon !== undefined
                               ? `${lat.toFixed(3)}, ${lon.toFixed(3)}`
                               : 'Unknown location'}
                           </div>
@@ -609,12 +787,18 @@ export default function App() {
       <section className="map">
         <MapContainer center={mapCenter} zoom={DEFAULT_ZOOM} scrollWheelZoom className="map__container">
           <MapViewController center={mapCenter} />
-          <MapClickHandler onSelect={(coords) => setObserver(coords)} />
+          <MapClickHandler onSelect={handleMapSelect} />
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
-          {observer ? <Marker position={observer} icon={DEFAULT_MARKER_ICON} /> : null}
+          {markers.map((point, index) => (
+            <Marker
+              key={`${point.lat}-${point.lng}-${index}`}
+              position={point}
+              icon={DEFAULT_MARKER_ICON}
+            />
+          ))}
           {overlay ? (
             <ImageOverlay
               url={`data:image/png;base64,${overlay.pngBase64}`}
