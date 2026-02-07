@@ -690,16 +690,6 @@ export default function App() {
           {errors.observer ? <div className="status">{errors.observer}</div> : null}
           {status ? <div className="status">{status}</div> : null}
         </div>
-        <div>
-          <h2>API Payload</h2>
-          <pre className="code">
-{payloadPreview
-  ? JSON.stringify(payloadPreview, null, 2)
-  : isMultiMode
-  ? '// Awaiting observer points'
-  : '// Awaiting observer location'}
-          </pre>
-        </div>
       </section>
 
       <section className="panel">

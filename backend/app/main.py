@@ -678,7 +678,7 @@ def compute_multi_viewshed_endpoint(
     crs=dem_result.crs,
     color_single=(220, 38, 38),
     color_shared=(250, 204, 21),
-    color_all=(34, 197, 94),
+    color_all=(0, 46, 93),
     alpha=128,
     background_rgb=(255, 255, 255),
     background_alpha=0,
