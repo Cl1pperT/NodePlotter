@@ -17,7 +17,8 @@ const DEFAULT_MARKER_ICON = L.icon({
 });
 
 const DEFAULT_CENTER: LatLngLiteral = { lat: 20, lng: 0 };
-const DEFAULT_ZOOM = 2;
+// Approx. 25 miles across on a typical laptop viewport.
+const DEFAULT_ZOOM = 11;
 const API_BASE_URL = 'http://localhost:8000';
 const WARN_CELL_COUNT = 1_000_000;
 const MAX_CELL_COUNT = 4_000_000;
