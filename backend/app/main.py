@@ -230,7 +230,7 @@ def compute_viewshed_endpoint(payload: ViewshedRequest, debug: int = Query(0, ge
   except Exception as exc:
     raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-  visibility = smooth_visibility_mask(visibility, passes=1)
+  visibility = smooth_visibility_mask(visibility, passes=2, threshold=7)
   timings["viewshed_compute_s"] = time.perf_counter() - compute_start
 
   encode_start = time.perf_counter()
@@ -239,9 +239,9 @@ def compute_viewshed_endpoint(payload: ViewshedRequest, debug: int = Query(0, ge
     transform=dem_result.transform,
     crs=dem_result.crs,
     color_rgb=(220, 38, 38),
-    alpha=255,
+    alpha=128,
     background_rgb=(255, 255, 255),
-    background_alpha=255,
+    background_alpha=0,
   )
   timings["encode_png_s"] = time.perf_counter() - encode_start
 
