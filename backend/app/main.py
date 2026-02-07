@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import base64
 import math
+import os
 import time
 from typing import Any, Literal
 
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import shared_memory
 import numpy as np
 
 from fastapi import FastAPI, HTTPException, Query
@@ -35,6 +38,7 @@ MAX_GRID_SIDE = 2000
 WARN_CELL_COUNT = 1_000_000
 MAX_CELL_COUNT = 4_000_000
 MAX_OBSERVERS = 12
+MAX_PARALLEL_WORKERS = max(1, (os.cpu_count() or 1))
 
 app.add_middleware(
   CORSMiddleware,
@@ -335,6 +339,47 @@ def compute_viewshed_endpoint(
   )
 
 
+_SHARED_DEM: np.ndarray | None = None
+_SHARED_DEM_SHM: shared_memory.SharedMemory | None = None
+
+
+def _init_shared_dem(shm_name: str, shape: tuple[int, int], dtype_str: str) -> None:
+  global _SHARED_DEM, _SHARED_DEM_SHM
+  _SHARED_DEM_SHM = shared_memory.SharedMemory(name=shm_name)
+  _SHARED_DEM = np.ndarray(shape, dtype=np.dtype(dtype_str), buffer=_SHARED_DEM_SHM.buf)
+
+
+def _compute_visibility_shared(
+  observer_rc: tuple[int, int],
+  observer_height_m: float,
+  cell_size_m: float,
+  mode: Literal["fast", "accurate"],
+  smooth_passes: int,
+  smooth_threshold: int,
+) -> np.ndarray:
+  dem = _SHARED_DEM
+  if dem is None:
+    raise RuntimeError("Shared DEM not initialized.")
+
+  if mode == "fast":
+    visibility = compute_viewshed_radial(
+      dem,
+      observer_rc=observer_rc,
+      observer_height_m=observer_height_m,
+      cell_size_m=cell_size_m,
+    )
+  else:
+    visibility = compute_viewshed_baseline(
+      dem,
+      observer_rc=observer_rc,
+      observer_height_m=observer_height_m,
+      cell_size_m=cell_size_m,
+    )
+
+  visibility = smooth_visibility_mask(visibility, passes=smooth_passes, threshold=smooth_threshold)
+  return visibility.astype(np.uint8)
+
+
 @app.post("/viewshed/multi", response_model=MultiViewshedResponse)
 def compute_multi_viewshed_endpoint(
   payload: MultiViewshedRequest,
@@ -455,31 +500,63 @@ def compute_multi_viewshed_endpoint(
 
   compute_start = time.perf_counter()
   counts = np.zeros(dem.shape, dtype=np.uint16)
-  for observer_rc in observer_pixels:
+  smooth_passes = 1 if mode == "accurate" else 2
+  smooth_threshold = 3 if mode == "accurate" else 7
+  use_parallel = len(observer_pixels) > 1 and MAX_PARALLEL_WORKERS > 1
+
+  if use_parallel:
+    shm = shared_memory.SharedMemory(create=True, size=dem.nbytes)
+    shm_array = np.ndarray(dem.shape, dtype=dem.dtype, buffer=shm.buf)
+    shm_array[:] = dem
     try:
-      if mode == "fast":
-        visibility = compute_viewshed_radial(
-          dem,
-          observer_rc=observer_rc,
-          observer_height_m=payload.observerHeightM,
-          cell_size_m=cell_size_m,
-        )
-      else:
-        visibility = compute_viewshed_baseline(
-          dem,
-          observer_rc=observer_rc,
-          observer_height_m=payload.observerHeightM,
-          cell_size_m=cell_size_m,
-        )
-    except Exception as exc:
-      raise HTTPException(status_code=400, detail=str(exc)) from exc
+      max_workers = min(len(observer_pixels), MAX_PARALLEL_WORKERS)
+      with ProcessPoolExecutor(
+        max_workers=max_workers,
+        initializer=_init_shared_dem,
+        initargs=(shm.name, dem.shape, str(dem.dtype)),
+      ) as executor:
+        futures = [
+          executor.submit(
+            _compute_visibility_shared,
+            observer_rc,
+            payload.observerHeightM,
+            cell_size_m,
+            mode,
+            smooth_passes,
+            smooth_threshold,
+          )
+          for observer_rc in observer_pixels
+        ]
+        for future in futures:
+          try:
+            counts += future.result().astype(np.uint16)
+          except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+      shm.close()
+      shm.unlink()
+  else:
+    for observer_rc in observer_pixels:
+      try:
+        if mode == "fast":
+          visibility = compute_viewshed_radial(
+            dem,
+            observer_rc=observer_rc,
+            observer_height_m=payload.observerHeightM,
+            cell_size_m=cell_size_m,
+          )
+        else:
+          visibility = compute_viewshed_baseline(
+            dem,
+            observer_rc=observer_rc,
+            observer_height_m=payload.observerHeightM,
+            cell_size_m=cell_size_m,
+          )
+      except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if mode == "accurate":
-      visibility = smooth_visibility_mask(visibility, passes=1, threshold=3)
-    else:
-      visibility = smooth_visibility_mask(visibility, passes=2, threshold=7)
-
-    counts += visibility.astype(np.uint16)
+      visibility = smooth_visibility_mask(visibility, passes=smooth_passes, threshold=smooth_threshold)
+      counts += visibility.astype(np.uint16)
 
   timings["viewshed_compute_s"] = time.perf_counter() - compute_start
 
