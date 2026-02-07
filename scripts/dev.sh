@@ -5,22 +5,7 @@ ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 
 cd "$ROOT_DIR"
 
-PYTHON_BIN="$ROOT_DIR/backend/.venv/bin/python"
-if [[ ! -x "$PYTHON_BIN" ]]; then
-  PYTHON_BIN="python"
-fi
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  PYTHON_BIN="python3"
-fi
-
-BACKEND_ARGS=(
-  -m uvicorn app.main:app
-  --reload
-  --host 0.0.0.0
-  --port 8000
-  --app-dir backend
-  --reload-exclude "backend/.venv/*"
-)
+BACKEND_CMD=("$ROOT_DIR/scripts/dev-backend.sh")
 FRONTEND_CMD=(npm run dev:frontend)
 
 cleanup() {
@@ -36,7 +21,7 @@ trap cleanup EXIT
 
 (
   cd "$ROOT_DIR"
-  "$PYTHON_BIN" "${BACKEND_ARGS[@]}"
+  "${BACKEND_CMD[@]}"
 ) &
 BACKEND_PID=$!
 

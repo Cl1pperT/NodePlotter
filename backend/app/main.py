@@ -10,7 +10,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from pyproj import CRS, Transformer
 
-from app.cache import load_cached_payload, load_cached_viewshed, make_cache_key, store_cached_viewshed, list_cached_viewsheds
+from app.cache import (
+  load_cached_payload,
+  load_cached_viewshed,
+  make_cache_key,
+  store_cached_viewshed,
+  list_cached_viewsheds,
+  delete_cached_viewshed,
+)
 from app.dem import get_dem, get_dem_version
 from app.output import RasterOutput, visibility_mask_to_png
 from app.viewshed import compute_viewshed as compute_viewshed_mask, smooth_visibility_mask
@@ -126,6 +133,13 @@ def viewshed_cache(cache_key: str) -> ViewshedCacheResponse:
     overlay=overlay_payload,
     metadata=payload.get("metadata", {}),
   )
+
+
+@app.delete("/viewshed/cache/{cache_key}")
+def delete_viewshed_cache(cache_key: str) -> dict:
+  if not delete_cached_viewshed(cache_key):
+    raise HTTPException(status_code=404, detail="Cached viewshed not found.")
+  return {"status": "deleted", "cacheKey": cache_key}
 
 
 @app.post("/viewshed", response_model=ViewshedResponse)

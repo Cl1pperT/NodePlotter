@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import shutil
 
 
 CACHE_VERSION = "v1"
@@ -181,3 +182,12 @@ def list_cached_viewsheds(limit: int = 50, cache_dir: Path | None = None) -> lis
 
   entries.sort(key=sort_key, reverse=True)
   return entries[: max(0, limit)]
+
+
+def delete_cached_viewshed(cache_key: str, cache_dir: Path | None = None) -> bool:
+  root = cache_dir or DEFAULT_CACHE_DIR
+  entry_dir = root / cache_key
+  if not entry_dir.exists() or not entry_dir.is_dir():
+    return False
+  shutil.rmtree(entry_dir)
+  return True

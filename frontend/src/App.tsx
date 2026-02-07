@@ -125,6 +125,7 @@ export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(false);
 
   const matchedPreset = useMemo(() => {
     return (
@@ -282,6 +283,31 @@ export default function App() {
       })
       .finally(() => {
         setIsSubmitting(false);
+      });
+  };
+
+  const handleDeleteHistory = (item: HistoryItem) => {
+    if (!item.cacheKey) {
+      return;
+    }
+    setIsHistoryLoading(true);
+    setHistoryError(null);
+    fetch(`${API_BASE_URL}/viewshed/cache/${item.cacheKey}`, { method: 'DELETE' })
+      .then(async (response) => {
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || `Delete failed with status ${response.status}`);
+        }
+        return response.json();
+      })
+      .then(() => {
+        setHistory((current) => current.filter((entry) => entry.cacheKey !== item.cacheKey));
+      })
+      .catch((error: Error) => {
+        setHistoryError(error.message || 'Unable to delete cached viewshed.');
+      })
+      .finally(() => {
+        setIsHistoryLoading(false);
       });
   };
 
@@ -490,41 +516,62 @@ export default function App() {
         <div className="history">
           <div className="history__header">
             <h2>Recent Viewsheds</h2>
-            <button className="btn btn--ghost" type="button" onClick={fetchHistory} disabled={isHistoryLoading}>
-              {isHistoryLoading ? 'Refreshing...' : 'Refresh'}
-            </button>
+            <div className="history__actions">
+              <button
+                className="btn btn--ghost"
+                type="button"
+                onClick={() => setIsHistoryCollapsed((current) => !current)}
+              >
+                {isHistoryCollapsed ? 'Show' : 'Hide'}
+              </button>
+              <button className="btn btn--ghost" type="button" onClick={fetchHistory} disabled={isHistoryLoading}>
+                {isHistoryLoading ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
           </div>
-          {historyError ? <div className="error">{historyError}</div> : null}
-          {history.length === 0 && !historyError ? (
-            <div className="status">No cached viewsheds yet.</div>
-          ) : (
-            <ul className="history__list">
-              {history.map((item) => {
-                const createdAt = item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Unknown time';
-                const lat = item.request?.observer?.lat;
-                const lon = item.request?.observer?.lon;
-                const radius = item.request?.maxRadiusKm;
-                const resolution = item.request?.resolutionM;
-                return (
-                  <li key={item.cacheKey} className="history__item">
-                    <button className="history__button" type="button" onClick={() => handleLoadHistory(item)}>
-                      <div className="history__title">{createdAt}</div>
-                      <div className="history__meta">
-                        {lat !== undefined && lon !== undefined
-                          ? `${lat.toFixed(3)}, ${lon.toFixed(3)}`
-                          : 'Unknown location'}
-                      </div>
-                      <div className="history__meta">
-                        {radius !== undefined && resolution !== undefined
-                          ? `${radius} km · ${resolution} m`
-                          : 'Unknown params'}
-                      </div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+          {!isHistoryCollapsed ? (
+            <>
+              {historyError ? <div className="error">{historyError}</div> : null}
+              {history.length === 0 && !historyError ? (
+                <div className="status">No cached viewsheds yet.</div>
+              ) : (
+                <ul className="history__list">
+                  {history.map((item) => {
+                    const createdAt = item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Unknown time';
+                    const lat = item.request?.observer?.lat;
+                    const lon = item.request?.observer?.lon;
+                    const radius = item.request?.maxRadiusKm;
+                    const resolution = item.request?.resolutionM;
+                    return (
+                      <li key={item.cacheKey} className="history__item">
+                        <button className="history__button" type="button" onClick={() => handleLoadHistory(item)}>
+                          <div className="history__title">{createdAt}</div>
+                          <div className="history__meta">
+                            {lat !== undefined && lon !== undefined
+                              ? `${lat.toFixed(3)}, ${lon.toFixed(3)}`
+                              : 'Unknown location'}
+                          </div>
+                          <div className="history__meta">
+                            {radius !== undefined && resolution !== undefined
+                              ? `${radius} km · ${resolution} m`
+                              : 'Unknown params'}
+                          </div>
+                        </button>
+                        <button
+                          className="history__delete"
+                          type="button"
+                          onClick={() => handleDeleteHistory(item)}
+                          aria-label="Delete viewshed"
+                        >
+                          Delete
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </>
+          ) : null}
         </div>
       </section>
 
