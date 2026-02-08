@@ -4,9 +4,12 @@ import base64
 import math
 import os
 import time
-from typing import Any, Literal
+from dataclasses import dataclass
+from threading import Lock, Thread
+from uuid import uuid4
+from typing import Any, Callable, Literal
 
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import shared_memory
 import numpy as np
 
@@ -39,6 +42,20 @@ WARN_CELL_COUNT = 1_000_000
 MAX_CELL_COUNT = 4_000_000
 MAX_PARALLEL_WORKERS = max(1, (os.cpu_count() or 1))
 MAX_OBSERVERS = min(8, MAX_PARALLEL_WORKERS)
+
+
+@dataclass
+class MultiViewshedJob:
+  status: Literal["pending", "running", "completed", "failed"]
+  total: int
+  completed: int = 0
+  result: dict[str, Any] | None = None
+  error: str | None = None
+  updated_at: float = 0.0
+
+
+_MULTI_JOBS: dict[str, MultiViewshedJob] = {}
+_MULTI_JOBS_LOCK = Lock()
 
 app.add_middleware(
   CORSMiddleware,
@@ -473,6 +490,112 @@ def compute_multi_viewshed_endpoint(
   debug: int = Query(0, ge=0, le=1),
   mode: Literal["fast", "accurate"] = Query("accurate"),
 ) -> MultiViewshedResponse:
+  return _compute_multi_viewshed(payload, mode, debug)
+
+
+@app.post("/viewshed/multi/jobs")
+def start_multi_viewshed_job(
+  payload: MultiViewshedRequest,
+  debug: int = Query(0, ge=0, le=1),
+  mode: Literal["fast", "accurate"] = Query("accurate"),
+) -> dict[str, Any]:
+  observers = _normalize_observers(payload.observers)
+  if len(observers) < 2:
+    raise HTTPException(status_code=400, detail="At least two unique observer points are required.")
+  if len(observers) > MAX_OBSERVERS:
+    raise HTTPException(status_code=400, detail=f"Limit observers to {MAX_OBSERVERS} points.")
+
+  job_id = uuid4().hex
+  job = MultiViewshedJob(status="pending", total=len(observers), completed=0, updated_at=time.time())
+  with _MULTI_JOBS_LOCK:
+    _MULTI_JOBS[job_id] = job
+
+  thread = Thread(
+    target=_run_multi_viewshed_job,
+    args=(job_id, payload, mode, debug),
+    daemon=True,
+  )
+  thread.start()
+
+  return {"jobId": job_id, "total": job.total}
+
+
+@app.get("/viewshed/multi/jobs/{job_id}")
+def get_multi_viewshed_job(job_id: str) -> dict[str, Any]:
+  with _MULTI_JOBS_LOCK:
+    job = _MULTI_JOBS.get(job_id)
+  if job is None:
+    raise HTTPException(status_code=404, detail="Viewshed job not found.")
+
+  payload: dict[str, Any] = {
+    "jobId": job_id,
+    "status": job.status,
+    "total": job.total,
+    "completed": job.completed,
+  }
+  if job.status == "failed":
+    payload["error"] = job.error
+  if job.status == "completed":
+    payload["result"] = job.result
+  return payload
+
+
+def _run_multi_viewshed_job(
+  job_id: str,
+  payload: MultiViewshedRequest,
+  mode: Literal["fast", "accurate"],
+  debug: int,
+) -> None:
+  with _MULTI_JOBS_LOCK:
+    job = _MULTI_JOBS.get(job_id)
+    if job is None:
+      return
+    job.status = "running"
+    job.updated_at = time.time()
+
+  def progress_callback(delta: int = 1) -> None:
+    with _MULTI_JOBS_LOCK:
+      job_ref = _MULTI_JOBS.get(job_id)
+      if job_ref is None:
+        return
+      job_ref.completed = min(job_ref.total, job_ref.completed + delta)
+      job_ref.updated_at = time.time()
+
+  try:
+    result = _compute_multi_viewshed(payload, mode, debug, progress_callback)
+    with _MULTI_JOBS_LOCK:
+      job_ref = _MULTI_JOBS.get(job_id)
+      if job_ref is None:
+        return
+      job_ref.status = "completed"
+      job_ref.completed = job_ref.total
+      job_ref.result = result.model_dump()
+      job_ref.updated_at = time.time()
+  except HTTPException as exc:
+    message = str(exc.detail)
+    with _MULTI_JOBS_LOCK:
+      job_ref = _MULTI_JOBS.get(job_id)
+      if job_ref is None:
+        return
+      job_ref.status = "failed"
+      job_ref.error = message
+      job_ref.updated_at = time.time()
+  except Exception as exc:  # pragma: no cover - unexpected failures
+    with _MULTI_JOBS_LOCK:
+      job_ref = _MULTI_JOBS.get(job_id)
+      if job_ref is None:
+        return
+      job_ref.status = "failed"
+      job_ref.error = str(exc)
+      job_ref.updated_at = time.time()
+
+
+def _compute_multi_viewshed(
+  payload: MultiViewshedRequest,
+  mode: Literal["fast", "accurate"],
+  debug: int,
+  progress_callback: Callable[[int], None] | None = None,
+) -> MultiViewshedResponse:
   timings: dict[str, float] = {}
   request_start = time.perf_counter()
 
@@ -538,6 +661,8 @@ def compute_multi_viewshed_endpoint(
     }
     estimate["cacheHit"] = True
     timings["cache_hit_s"] = time.perf_counter() - request_start
+    if progress_callback:
+      progress_callback(len(observers))
     return MultiViewshedResponse(
       observers=observers,
       maxRadiusKm=payload.maxRadiusKm,
@@ -616,7 +741,8 @@ def compute_multi_viewshed_endpoint(
           ): observer_rc
           for observer_rc in observer_pixels
         }
-        for future, observer_rc in future_map.items():
+        for future in as_completed(future_map):
+          observer_rc = future_map[future]
           try:
             visibility = future.result().astype(bool)
             if payload.consideredBounds:
@@ -630,6 +756,8 @@ def compute_multi_viewshed_endpoint(
                 payload.maxRadiusKm,
               )
             counts += visibility.astype(np.uint16)
+            if progress_callback:
+              progress_callback(1)
           except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
@@ -667,6 +795,8 @@ def compute_multi_viewshed_endpoint(
           payload.maxRadiusKm,
         )
       counts += visibility.astype(np.uint16)
+      if progress_callback:
+        progress_callback(1)
 
   timings["viewshed_compute_s"] = time.perf_counter() - compute_start
 

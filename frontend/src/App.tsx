@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { LatLngLiteral } from 'leaflet';
 import L from 'leaflet';
 import { ImageOverlay, MapContainer, Marker, Rectangle, TileLayer, useMap, useMapEvents } from 'react-leaflet';
@@ -156,11 +156,13 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [overlay, setOverlay] = useState<OverlayPayload | null>(null);
+  const [progress, setProgress] = useState<{ completed: number; total: number } | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(true);
   const [computeMode, setComputeMode] = useState<ComputeMode>('accurate');
+  const progressPollRef = useRef<number | null>(null);
 
   const matchedPreset = useMemo(() => {
     return (
@@ -601,9 +603,95 @@ export default function App() {
     setIsSubmitting(true);
     setSubmitError(null);
     setOverlay(null);
+    setProgress(null);
 
-    const endpoint = isMultiMode ? 'viewshed/multi' : 'viewshed';
-    fetch(`${API_BASE_URL}/${endpoint}?mode=${computeMode}`, {
+    if (progressPollRef.current) {
+      window.clearInterval(progressPollRef.current);
+      progressPollRef.current = null;
+    }
+
+    if (isMultiMode) {
+      fetch(`${API_BASE_URL}/viewshed/multi/jobs?mode=${computeMode}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payloadPreview),
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || `Request failed with status ${response.status}`);
+          }
+          return response.json();
+        })
+        .then((data) => {
+          const jobId = data.jobId as string | undefined;
+          const total = Number(data.total ?? multiObservers.length);
+          if (!jobId) {
+            throw new Error('Failed to start viewshed job.');
+          }
+          setProgress({ completed: 0, total });
+          let polling = false;
+          progressPollRef.current = window.setInterval(async () => {
+            if (polling) {
+              return;
+            }
+            polling = true;
+            try {
+              const response = await fetch(`${API_BASE_URL}/viewshed/multi/jobs/${jobId}`);
+              if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || `Progress request failed with status ${response.status}`);
+              }
+              const job = await response.json();
+              if (job.status === 'failed') {
+                setSubmitError(job.error || 'Unable to compute viewshed.');
+                if (progressPollRef.current) {
+                  window.clearInterval(progressPollRef.current);
+                  progressPollRef.current = null;
+                }
+                setIsSubmitting(false);
+                setProgress(null);
+                return;
+              }
+              if (job.status === 'completed') {
+                if (job.result?.overlay) {
+                  setOverlay(job.result.overlay);
+                }
+                if (progressPollRef.current) {
+                  window.clearInterval(progressPollRef.current);
+                  progressPollRef.current = null;
+                }
+                setIsSubmitting(false);
+                setProgress(null);
+                return;
+              }
+              const completed = Number(job.completed ?? 0);
+              const totalCount = Number(job.total ?? total);
+              setProgress({ completed, total: totalCount });
+            } catch (error: unknown) {
+              const message = error instanceof Error ? error.message : 'Unable to compute viewshed.';
+              setSubmitError(message);
+              if (progressPollRef.current) {
+                window.clearInterval(progressPollRef.current);
+                progressPollRef.current = null;
+              }
+              setIsSubmitting(false);
+              setProgress(null);
+            } finally {
+              polling = false;
+            }
+          }, 600);
+        })
+        .catch((error: Error) => {
+          setSubmitError(error.message || 'Unable to compute viewshed.');
+          setIsSubmitting(false);
+        });
+      return;
+    }
+
+    fetch(`${API_BASE_URL}/viewshed?mode=${computeMode}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -641,6 +729,15 @@ export default function App() {
 
   useEffect(() => {
     fetchHistory();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (progressPollRef.current) {
+        window.clearInterval(progressPollRef.current);
+        progressPollRef.current = null;
+      }
+    };
   }, []);
 
   return (
@@ -810,7 +907,9 @@ export default function App() {
           {isSubmitting ? (
             <div className="loading">
               <div className="loading__bar" />
-              <span className="loading__label">Computing viewshed…</span>
+              <span className="loading__label">
+                {progress ? `Computing viewshed… (${progress.completed}/${progress.total})` : 'Computing viewshed…'}
+              </span>
             </div>
           ) : null}
           {submitError ? <div className="error form__error">{submitError}</div> : null}
