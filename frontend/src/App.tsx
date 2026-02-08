@@ -2,19 +2,31 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { LatLngLiteral } from 'leaflet';
 import L from 'leaflet';
 import { ImageOverlay, MapContainer, Marker, Rectangle, TileLayer, useMap, useMapEvents } from 'react-leaflet';
-import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
-import iconUrl from 'leaflet/dist/images/marker-icon.png';
-import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
+const MARKER_COLORS = ['#6D28D9', '#2563EB', '#16A34A', '#EAB308', '#F97316', '#DC2626'];
 
-const DEFAULT_MARKER_ICON = L.icon({
-  iconRetinaUrl,
-  iconUrl,
-  shadowUrl,
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41],
-});
+const markerIconCache = new Map<string, L.Icon>();
+
+const getColoredMarkerIcon = (color: string) => {
+  const cached = markerIconCache.get(color);
+  if (cached) {
+    return cached;
+  }
+
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="30" height="45" viewBox="0 0 30 45">
+      <path d="M15 0C6.7 0 0 6.7 0 15c0 12 15 30 15 30s15-18 15-30C30 6.7 23.3 0 15 0z" fill="${color}" />
+      <circle cx="15" cy="15" r="5.5" fill="#ffffff" fill-opacity="0.85" />
+    </svg>
+  `.trim();
+  const icon = L.icon({
+    iconUrl: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
+    iconSize: [30, 45],
+    iconAnchor: [15, 44],
+    popupAnchor: [0, -36],
+  });
+  markerIconCache.set(color, icon);
+  return icon;
+};
 
 const DEFAULT_CENTER: LatLngLiteral = { lat: 20, lng: 0 };
 // Approx. 25 miles across on a typical laptop viewport.
@@ -625,6 +637,7 @@ export default function App() {
         [consideredBounds.maxLat, consideredBounds.maxLon],
       ] as [[number, number], [number, number]])
     : null;
+  const markerColors = MARKER_COLORS;
 
   useEffect(() => {
     fetchHistory();
@@ -816,6 +829,10 @@ export default function App() {
                     {multiObservers.map((point, index) => (
                       <div key={`${point.lat}-${point.lng}-${index}`} className="points__item">
                         <span className="points__meta">
+                          <span
+                            className="points__color"
+                            style={{ backgroundColor: markerColors[index % markerColors.length] }}
+                          />
                           {point.lat.toFixed(5)}, {point.lng.toFixed(5)}
                         </span>
                         <button
@@ -844,6 +861,7 @@ export default function App() {
               <div className="points">
                 <div className="points__item">
                   <span className="points__meta">
+                    <span className="points__color" style={{ backgroundColor: markerColors[0] }} />
                     {observer.lat.toFixed(5)}, {observer.lng.toFixed(5)}
                   </span>
                 </div>
@@ -938,7 +956,7 @@ export default function App() {
             <Marker
               key={`${point.lat}-${point.lng}-${index}`}
               position={point}
-              icon={DEFAULT_MARKER_ICON}
+              icon={getColoredMarkerIcon(markerColors[index % markerColors.length])}
             />
           ))}
           {consideredBoundsLatLng ? (

@@ -167,6 +167,17 @@ body {
 .points__meta {
   color: #4b4b4b;
   font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.points__color {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 999px;
+  border: 1px solid #1b1b1b;
+  flex-shrink: 0;
 }
 
 .points__remove {
