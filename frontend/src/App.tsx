@@ -163,6 +163,9 @@ export default function App() {
   const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(true);
   const [computeMode, setComputeMode] = useState<ComputeMode>('accurate');
   const progressPollRef = useRef<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchStatus, setSearchStatus] = useState<string | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
 
   const matchedPreset = useMemo(() => {
     return (
@@ -348,6 +351,80 @@ export default function App() {
     setMapCenter(coords);
   };
 
+  const applyObserverSelection = (coords: ObserverState) => {
+    setMapTool('observer');
+    if (isMultiMode) {
+      addObserverPoint(coords);
+      return;
+    }
+    setObserver(coords);
+    setMapCenter(coords);
+  };
+
+  const parseLatLon = (input: string): ObserverState | null => {
+    const matches = input.match(/-?\d+(?:\.\d+)?/g);
+    if (!matches || matches.length < 2) {
+      return null;
+    }
+    const lat = Number(matches[0]);
+    const lon = Number(matches[1]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return null;
+    }
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+      return null;
+    }
+    return { lat, lng: lon };
+  };
+
+  const handleSearch = async () => {
+    const query = searchQuery.trim();
+    if (!query) {
+      setSearchStatus('Enter an address or coordinates.');
+      return;
+    }
+    setSearchStatus(null);
+    setIsSearching(true);
+
+    const parsed = parseLatLon(query);
+    if (parsed) {
+      applyObserverSelection(parsed);
+      setSearchStatus(null);
+      setIsSearching(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`,
+        {
+          headers: {
+            'Accept-Language': 'en',
+          },
+        }
+      );
+      if (!response.ok) {
+        throw new Error(`Search failed with status ${response.status}`);
+      }
+      const results = (await response.json()) as Array<{ lat: string; lon: string }>;
+      if (!results.length) {
+        throw new Error('No results found.');
+      }
+      const lat = Number(results[0].lat);
+      const lon = Number(results[0].lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        throw new Error('Invalid search result.');
+      }
+      applyObserverSelection({ lat, lng: lon });
+      setSearchStatus(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to search location.';
+      setSearchStatus(message);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
   const normalizeSquareBounds = (start: ObserverState, end: ObserverState): ConsideredBounds => {
     const startPoint = L.CRS.EPSG3857.project(L.latLng(start.lat, start.lng));
     const endPoint = L.CRS.EPSG3857.project(L.latLng(end.lat, end.lng));
@@ -438,12 +515,7 @@ export default function App() {
       setStatus(null);
       return;
     }
-    if (isMultiMode) {
-      addObserverPoint(coords);
-      return;
-    }
-    setObserver(coords);
-    setMapCenter(coords);
+    applyObserverSelection(coords);
   };
 
   const handleRemoveObserver = (index: number) => {
@@ -756,6 +828,29 @@ export default function App() {
         <div className="form-layout">
           <form className="form" onSubmit={handleSubmit}>
           <div className="form__group form__group--full">
+            <label htmlFor="locationSearch">Search Address or Coordinates</label>
+            <div className="search">
+              <input
+                id="locationSearch"
+                name="locationSearch"
+                type="text"
+                placeholder="e.g. 40.2338, -111.6585 or Provo, UT"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void handleSearch();
+                  }
+                }}
+              />
+              <button className="btn btn--ghost" type="button" onClick={handleSearch} disabled={isSearching}>
+                {isSearching ? 'Searching…' : 'Search'}
+              </button>
+            </div>
+            {searchStatus ? <div className="status">{searchStatus}</div> : null}
+          </div>
+          <div className="form__group form__group--full">
             <label>Presets</label>
             <div className="presets">
               {PRESETS.map((preset) => (
@@ -785,7 +880,7 @@ export default function App() {
                 className={`preset-btn${isMultiMode ? ' preset-btn--active' : ''}`}
                 onClick={() => handleMapTypeChange(true)}
               >
-                Complex
+                Multi-point
               </button>
             </div>
           </div>

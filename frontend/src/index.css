@@ -228,6 +228,17 @@ body {
   font-size: 0.95rem;
 }
 
+.search {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.search input {
+  width: 100%;
+}
+
 .error {
   color: #b42318;
   font-size: 0.85rem;
