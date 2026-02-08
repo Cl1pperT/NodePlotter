@@ -147,7 +147,7 @@ export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
-  const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(false);
+  const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(true);
   const [computeMode, setComputeMode] = useState<ComputeMode>('accurate');
 
   const matchedPreset = useMemo(() => {
