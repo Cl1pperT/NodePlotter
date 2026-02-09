@@ -1074,46 +1074,6 @@ export default function App() {
         <div className="form-layout">
           <form className="form" onSubmit={handleSubmit}>
           <div className="form__group form__group--full">
-            <label htmlFor="scenarioName">Scenario Name</label>
-            <div className="search">
-              <input
-                id="scenarioName"
-                name="scenarioName"
-                type="text"
-                placeholder="e.g. Logan overview"
-                value={scenarioName}
-                onChange={(event) => setScenarioName(event.target.value)}
-              />
-              <button className="btn btn--ghost" type="button" onClick={handleSaveScenario} disabled={isScenarioSaving}>
-                {isScenarioSaving ? 'Saving…' : 'Save Scenario'}
-              </button>
-            </div>
-            {scenarioStatus ? <div className="status">{scenarioStatus}</div> : null}
-          </div>
-          <div className="form__group form__group--full">
-            <label htmlFor="locationSearch">Search Address or Coordinates</label>
-            <div className="search">
-              <input
-                id="locationSearch"
-                name="locationSearch"
-                type="text"
-                placeholder="e.g. 40.2338, -111.6585 or Provo, UT"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    void handleSearch();
-                  }
-                }}
-              />
-              <button className="btn btn--ghost" type="button" onClick={handleSearch} disabled={isSearching}>
-                {isSearching ? 'Searching…' : 'Search'}
-              </button>
-            </div>
-            {searchStatus ? <div className="status">{searchStatus}</div> : null}
-          </div>
-          <div className="form__group form__group--full">
             <label>Presets</label>
             <div className="presets">
               {PRESETS.map((preset) => (
@@ -1279,6 +1239,29 @@ export default function App() {
           {submitError ? <div className="error form__error">{submitError}</div> : null}
           </form>
           <aside className="positions">
+            <div className="search-panel">
+              <label htmlFor="locationSearch">Search Address or Coordinates</label>
+              <div className="search">
+                <input
+                  id="locationSearch"
+                  name="locationSearch"
+                  type="text"
+                  placeholder="e.g. 40.2338, -111.6585 or Provo, UT"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void handleSearch();
+                    }
+                  }}
+                />
+                <button className="btn btn--ghost" type="button" onClick={handleSearch} disabled={isSearching}>
+                  {isSearching ? 'Searching…' : 'Search'}
+                </button>
+              </div>
+              {searchStatus ? <div className="status">{searchStatus}</div> : null}
+            </div>
             <h2>Positions</h2>
             {errors.observers ? <div className="status">{errors.observers}</div> : null}
             {errors.observer ? <div className="status">{errors.observer}</div> : null}
@@ -1425,6 +1408,23 @@ export default function App() {
                 {isScenarioLoading ? 'Refreshing...' : 'Refresh'}
               </button>
             </div>
+          </div>
+          <div className="scenario-save">
+            <label htmlFor="scenarioName">Scenario Name</label>
+            <div className="search">
+              <input
+                id="scenarioName"
+                name="scenarioName"
+                type="text"
+                placeholder="e.g. Logan overview"
+                value={scenarioName}
+                onChange={(event) => setScenarioName(event.target.value)}
+              />
+              <button className="btn btn--ghost" type="button" onClick={handleSaveScenario} disabled={isScenarioSaving}>
+                {isScenarioSaving ? 'Saving…' : 'Save Scenario'}
+              </button>
+            </div>
+            {scenarioStatus ? <div className="status">{scenarioStatus}</div> : null}
           </div>
           {!isScenarioCollapsed ? (
             <>

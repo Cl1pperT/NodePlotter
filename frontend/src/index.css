@@ -97,6 +97,19 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
+.scenario-save {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.scenario-save label {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6d675e;
+}
+
 .form-layout {
   display: grid;
   grid-template-columns: minmax(320px, 2fr) minmax(240px, 1fr);
@@ -115,6 +128,18 @@ body {
 
 .positions h2 {
   margin: 0;
+}
+
+.search-panel {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.search-panel label {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6d675e;
 }
 
 .scenarios {
@@ -311,6 +336,13 @@ body {
 
 .search input {
   width: 100%;
+}
+
+.search-panel .search input,
+.scenario-save .search input {
+  min-height: 2.75rem;
+  font-size: 1rem;
+  padding: 0.7rem 0.9rem;
 }
 
 .error {
