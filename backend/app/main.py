@@ -43,9 +43,7 @@ from app.viewshed import (
 
 app = FastAPI(title="Local Viewshed Explorer API")
 
-MAX_GRID_SIDE = 2000
 WARN_CELL_COUNT = 1_000_000
-MAX_CELL_COUNT = 4_000_000
 MAX_PARALLEL_WORKERS = max(1, (os.cpu_count() or 1))
 MAX_OBSERVERS = min(8, MAX_PARALLEL_WORKERS)
 
@@ -322,16 +320,6 @@ def compute_viewshed_endpoint(
     grid_width = grid_side
     grid_height = grid_side
   warnings: list[str] = []
-
-  if grid_side > MAX_GRID_SIDE or cell_count > MAX_CELL_COUNT:
-    raise HTTPException(
-      status_code=400,
-      detail=(
-        f"Requested grid {grid_width}x{grid_height} (~{cell_count:,} cells) exceeds "
-        f"limit {MAX_GRID_SIDE}x{MAX_GRID_SIDE} (~{MAX_CELL_COUNT:,} cells). "
-        "Reduce radius or increase resolution."
-      ),
-    )
 
   if cell_count > WARN_CELL_COUNT:
     warnings.append(
@@ -695,16 +683,6 @@ def _compute_multi_viewshed(
   bounds_m = _bounds_from_observers_meters(observers, radius_m, payload.consideredBounds)
   grid_width, grid_height, grid_side, cell_count = _estimate_grid_for_bounds(bounds_m, payload.resolutionM)
   warnings: list[str] = []
-
-  if grid_side > MAX_GRID_SIDE or cell_count > MAX_CELL_COUNT:
-    raise HTTPException(
-      status_code=400,
-      detail=(
-        f"Requested grid {grid_width}x{grid_height} (~{cell_count:,} cells) exceeds "
-        f"limit {MAX_GRID_SIDE}x{MAX_GRID_SIDE} (~{MAX_CELL_COUNT:,} cells). "
-        "Reduce radius, reduce observer spread, or increase resolution."
-      ),
-    )
 
   if cell_count > WARN_CELL_COUNT:
     warnings.append(
