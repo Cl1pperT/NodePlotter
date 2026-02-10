@@ -143,15 +143,15 @@ const PRESETS: Preset[] = [
     id: 'fast',
     label: 'Default',
     observerHeightMeters: '1.7',
-    maxRadiusKm: '10',
-    resolutionMeters: '90',
+    maxRadiusKm: '30',
+    resolutionMeters: '60',
   },
   {
     id: 'medium',
-    label: 'Medium',
+    label: 'Long Range',
     observerHeightMeters: '1.7',
-    maxRadiusKm: '20',
-    resolutionMeters: '60',
+    maxRadiusKm: '100',
+    resolutionMeters: '90',
   },
 ];
 
@@ -187,8 +187,8 @@ export default function App() {
   const [status, setStatus] = useState<string | null>(null);
   const [params, setParams] = useState<ParamsState>({
     observerHeightMeters: '1.7',
-    maxRadiusKm: '25',
-    resolutionMeters: '30',
+    maxRadiusKm: '30',
+    resolutionMeters: '60',
   });
   const [errors, setErrors] = useState<FieldErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
