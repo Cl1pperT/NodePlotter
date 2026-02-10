@@ -35,6 +35,24 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000
 const WARN_CELL_COUNT = 1_000_000;
 const MAX_CELL_COUNT = 4_000_000;
 const MAX_GRID_SIDE = 2000;
+const FAST_MS_PER_CELL = 0.00311;
+const ACCURATE_MS_PER_CELL = 0.183;
+
+const formatDuration = (seconds: number) => {
+  if (!Number.isFinite(seconds)) {
+    return '—';
+  }
+  if (seconds < 1) {
+    return `${Math.round(seconds * 1000)} ms`;
+  }
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)} s`;
+  }
+  if (seconds < 3600) {
+    return `${(seconds / 60).toFixed(1)} min`;
+  }
+  return `${(seconds / 3600).toFixed(1)} hr`;
+};
 
 type ObserverState = {
   lat: number;
@@ -357,6 +375,21 @@ export default function App() {
     const blocked = estimate.cellCount > MAX_CELL_COUNT || estimate.gridSide > MAX_GRID_SIDE;
     return { blocked, warnings };
   }, [estimate]);
+
+  const estimatedSeconds = useMemo(() => {
+    if (!estimate) {
+      return null;
+    }
+    const perCellMs = computeMode === 'fast' ? FAST_MS_PER_CELL : ACCURATE_MS_PER_CELL;
+    return (estimate.cellCount * perCellMs) / 1000;
+  }, [computeMode, estimate]);
+
+  const formattedEstimateTime = useMemo(() => {
+    if (estimatedSeconds === null) {
+      return null;
+    }
+    return formatDuration(estimatedSeconds);
+  }, [estimatedSeconds]);
 
   const handleParamChange = (field: keyof ParamsState, value: string) => {
     setParams((prev) => ({ ...prev, [field]: value }));
@@ -1171,33 +1204,6 @@ export default function App() {
             </div>
           </div>
           <div className="form__group form__group--full">
-            <label>Considered Area</label>
-            <div className="presets">
-              <button
-                type="button"
-                className={`preset-btn${mapTool === 'area' ? ' preset-btn--active' : ''}`}
-                onClick={handleDrawArea}
-              >
-                {mapTool === 'area' ? 'Click 2 Corners' : 'Draw Area'}
-              </button>
-              <button
-                type="button"
-                className="preset-btn"
-                onClick={handleClearArea}
-                disabled={!consideredBounds && !areaDraft}
-              >
-                Clear Area
-              </button>
-            </div>
-            {consideredBounds ? (
-              <div className="estimate">
-                Area: {consideredBounds.minLat.toFixed(3)}, {consideredBounds.minLon.toFixed(3)} →{' '}
-                {consideredBounds.maxLat.toFixed(3)}, {consideredBounds.maxLon.toFixed(3)}
-              </div>
-            ) : null}
-            {areaDraft ? <div className="warning">Click the opposite corner to finish the square.</div> : null}
-          </div>
-          <div className="form__group form__group--full">
             <label>Calculation Method</label>
             <div className="presets">
               <button
@@ -1278,12 +1284,45 @@ export default function App() {
             {errors.resolutionMeters ? <div className="error">{errors.resolutionMeters}</div> : null}
           </div>
           <div className="form__group form__group--full">
+            <label>Considered Area</label>
+            <div className="presets">
+              <button
+                type="button"
+                className={`preset-btn${mapTool === 'area' ? ' preset-btn--active' : ''}`}
+                onClick={handleDrawArea}
+              >
+                {mapTool === 'area' ? 'Click 2 Corners' : 'Draw Area'}
+              </button>
+              <button
+                type="button"
+                className="preset-btn"
+                onClick={handleClearArea}
+                disabled={!consideredBounds && !areaDraft}
+              >
+                Clear Area
+              </button>
+            </div>
+            {consideredBounds ? (
+              <div className="estimate">
+                Area: {consideredBounds.minLat.toFixed(3)}, {consideredBounds.minLon.toFixed(3)} →{' '}
+                {consideredBounds.maxLat.toFixed(3)}, {consideredBounds.maxLon.toFixed(3)}
+              </div>
+            ) : null}
+            {areaDraft ? <div className="warning">Click the opposite corner to finish the square.</div> : null}
+          </div>
+          <div className="form__group form__group--full">
             <label>Estimate</label>
             <div className="estimate">
               {estimate
                 ? `Grid ${estimate.gridWidth}x${estimate.gridHeight} (~${estimate.cellCount.toLocaleString()} cells)`
                 : 'Enter radius and resolution to estimate grid size.'}
             </div>
+            {estimate && formattedEstimateTime ? (
+              <div className="estimate estimate--time">
+                Est. compute time ({computeMode === 'fast' ? 'Default' : 'Advanced'}): ~{formattedEstimateTime}{' '}
+                <span className="estimate__note">(excludes DEM fetch/cache)</span>
+              </div>
+            ) : null}
             {guardrail.warnings.map((warning) => (
               <div key={warning} className="warning">
                 {warning}
