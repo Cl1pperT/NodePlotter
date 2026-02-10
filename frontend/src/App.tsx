@@ -32,7 +32,8 @@ const DEFAULT_CENTER: LatLngLiteral = { lat: 20, lng: 0 };
 // Approx. 25 miles across on a typical laptop viewport.
 const DEFAULT_ZOOM = 11;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-const WARN_CELL_COUNT = 1_000_000;
+const WARN_CELL_COUNT = 5_000_000;
+const MAX_CELL_COUNT = 10_000_000;
 const FAST_MS_PER_CELL = 0.00311;
 const ACCURATE_MS_PER_CELL = 0.183;
 
@@ -370,7 +371,8 @@ export default function App() {
         `Large request: ${estimate.gridSide}x${estimate.gridSide} (~${estimate.cellCount.toLocaleString()} cells).`
       );
     }
-    return { blocked: false, warnings };
+    const blocked = estimate.cellCount > MAX_CELL_COUNT;
+    return { blocked, warnings };
   }, [estimate]);
 
   const estimatedSeconds = useMemo(() => {
@@ -928,6 +930,10 @@ export default function App() {
       nextErrors.resolutionMeters = 'Enter a positive resolution in meters.';
     }
 
+    if (estimate && guardrail.blocked) {
+      nextErrors.guardrail = 'Cell count WAY to high try using draw considered area';
+    }
+
     if (areaDraft) {
       nextErrors.guardrail = 'Finish drawing the considered area (pick the second corner).';
     }
@@ -1324,7 +1330,7 @@ export default function App() {
             {errors.guardrail ? <div className="error">{errors.guardrail}</div> : null}
           </div>
           <div className="form__actions">
-            <button className="btn" type="submit" disabled={isSubmitting}>
+            <button className="btn" type="submit" disabled={isSubmitting || guardrail.blocked}>
               {isSubmitting ? 'Submitting...' : isMultiMode ? 'Compute Complex Map' : 'Compute Viewshed'}
             </button>
             <button className="btn btn--ghost" type="button" onClick={handleCancel} disabled={!isSubmitting}>
